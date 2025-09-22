@@ -1,4 +1,4 @@
-name: CI
+name: CI Pipeline
 
 on:
   push:
@@ -9,42 +9,49 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        service: [user, product, order, payment]
-
+    services:
+      docker:
+        image: docker:24.0.2
+        options: --privileged
+        ports:
+          - 3000:3000
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v3
 
       - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: 18
+          node-version: '18'
 
-      - name: Build Docker image
+      - name: Install dependencies
         run: |
-          cd services/${{ matrix.service }}
-          docker build -t fastfood-${{ matrix.service }} .
+          cd services/user && npm install
+          cd ../product && npm install
+          cd ../order && npm install
+          cd ../payment && npm install
 
-      - name: Test API dummy
+      - name: Build Docker images
         run: |
-          echo "Here you can add curl commands to test each service"
-      - name: Test API dummy
+          docker build -t fastfood-user ./services/user
+          docker build -t fastfood-product ./services/product
+          docker build -t fastfood-order ./services/order
+          docker build -t fastfood-payment ./services/payment
+
+      - name: Run containers temporarily
         run: |
-          cd services/${{ matrix.service }}
-          # chạy container tạm thời
-          docker run -d --name test-${{ matrix.service }} -p 3000:3000 fastfood-${{ matrix.service }}
-          sleep 5  # chờ container khởi động
-          if [ "${{ matrix.service }}" = "user" ]; then
-            curl -X POST http://localhost:3000/register -H "Content-Type: application/json" -d '{"username":"ciuser","password":"123456"}'
-          elif [ "${{ matrix.service }}" = "product" ]; then
-            curl http://localhost:3000/products
-          elif [ "${{ matrix.service }}" = "order" ]; then
-            curl -X POST http://localhost:3000/orders -H "Content-Type: application/json" -d '{"userId":1,"products":[{"id":1}]}' 
-          elif [ "${{ matrix.service }}" = "payment" ]; then
-            curl -X POST http://localhost:3000/payments -H "Content-Type: application/json" -d '{"orderId":1,"amount":50}'
-          fi
-          docker stop test-${{ matrix.service }}
-          docker rm test-${{ matrix.service }}
+          docker run -d -p 3001:3000 --name user-service fastfood-user
+          docker run -d -p 3002:3000 --name product-service fastfood-product
+          docker run -d -p 3003:3000 --name order-service fastfood-order
+          docker run -d -p 3004:3000 --name payment-service fastfood-payment
+
+      - name: Test dummy endpoints
+        run: |
+          curl -s http://localhost:3001/health
+          curl -s http://localhost:3002/health
+          curl -s http://localhost:3003/health
+          curl -s http://localhost:3004/health
+
+      - name: Stop and remove containers
+        run: |
+          docker rm -f user-service product-service order-service payment-service

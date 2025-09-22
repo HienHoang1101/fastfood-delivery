@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  user:
+    build: ./services/user
+    container_name: user-service
+    ports:
+      - "3001:3000"
+    environment:
+      - PORT=3000
+
+  product:
+    build: ./services/product
+    container_name: product-service
+    ports:
+      - "3002:3000"
+    environment:
+      - PORT=3000
+
+  order:
+    build: ./services/order
+    container_name: order-service
+    ports:
+      - "3003:3000"
+    environment:
+      - PORT=3000
+
+  payment:
+    build: ./services/payment
+    container_name: payment-service
+    ports:
+      - "3004:3000"
+    environment:
+      - PORT=3000
+
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring:/etc/prometheus
+    depends_on:
+      - user
+      - product
+      - order
+      - payment
+
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    ports:
+      - "3005:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
