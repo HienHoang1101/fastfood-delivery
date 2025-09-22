@@ -2,31 +2,49 @@ name: CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ main ]
 
 jobs:
-  build:
+  build-and-test:
     runs-on: ubuntu-latest
 
+    strategy:
+      matrix:
+        service: [user, product, order, payment]
+
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v3
-      with:
-        node-version: '18'
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
 
-    - name: Install dependencies
-      run: npm install
+      - name: Build Docker image
+        run: |
+          cd services/${{ matrix.service }}
+          docker build -t fastfood-${{ matrix.service }} .
 
-    - name: Run lint
-      run: echo "No lint configured yet"
-
-    - name: Run tests
-      run: echo "No tests yet"
-
-    - name: Build Docker image
-      run: echo "docker build will be added later"
+      - name: Test API dummy
+        run: |
+          echo "Here you can add curl commands to test each service"
+      - name: Test API dummy
+        run: |
+          cd services/${{ matrix.service }}
+          # chạy container tạm thời
+          docker run -d --name test-${{ matrix.service }} -p 3000:3000 fastfood-${{ matrix.service }}
+          sleep 5  # chờ container khởi động
+          if [ "${{ matrix.service }}" = "user" ]; then
+            curl -X POST http://localhost:3000/register -H "Content-Type: application/json" -d '{"username":"ciuser","password":"123456"}'
+          elif [ "${{ matrix.service }}" = "product" ]; then
+            curl http://localhost:3000/products
+          elif [ "${{ matrix.service }}" = "order" ]; then
+            curl -X POST http://localhost:3000/orders -H "Content-Type: application/json" -d '{"userId":1,"products":[{"id":1}]}' 
+          elif [ "${{ matrix.service }}" = "payment" ]; then
+            curl -X POST http://localhost:3000/payments -H "Content-Type: application/json" -d '{"orderId":1,"amount":50}'
+          fi
+          docker stop test-${{ matrix.service }}
+          docker rm test-${{ matrix.service }}
