@@ -45,12 +45,28 @@ jobs:
           docker run -d -p 3003:3000 --name order-service fastfood-order
           docker run -d -p 3004:3000 --name payment-service fastfood-payment
 
-      - name: Test dummy endpoints
+      - name: Test dummy endpoints with retry
         run: |
-          curl -s http://localhost:3001/health
-          curl -s http://localhost:3002/health
-          curl -s http://localhost:3003/health
-          curl -s http://localhost:3004/health
+          for i in {1..10}; do
+            curl -s http://localhost:3001/health && break
+            echo "Retrying user-service..."
+            sleep 3
+          done
+          for i in {1..10}; do
+            curl -s http://localhost:3002/health && break
+            echo "Retrying product-service..."
+            sleep 3
+          done
+          for i in {1..10}; do
+            curl -s http://localhost:3003/health && break
+            echo "Retrying order-service..."
+            sleep 3
+          done
+          for i in {1..10}; do
+            curl -s http://localhost:3004/health && break
+            echo "Retrying payment-service..."
+            sleep 3
+          done
 
       - name: Stop and remove containers
         run: |
