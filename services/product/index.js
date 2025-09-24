@@ -3,17 +3,34 @@ const client = require('prom-client'); // npm install prom-client
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Metric counter
-const requestCounter = new client.Counter({
-  name: 'product_requests_total',
-  help: 'Total requests to Product Service'
-});
-
 app.use(express.json());
 
-// Middleware tăng counter cho mọi request
+// ===== Default Metrics (CPU, memory, event loop, heap, etc.) =====
+client.collectDefaultMetrics();
+
+// ===== Custom Metrics =====
+const requestCounter = new client.Counter({
+  name: 'user_requests_total',
+  help: 'Total requests to User Service',
+  labelNames: ['method', 'route', 'status'],
+});
+
+const requestDuration = new client.Histogram({
+  name: 'user_request_duration_seconds',
+  help: 'Request duration in seconds for User Service',
+  labelNames: ['method', 'route', 'status'],
+  buckets: [0.1, 0.5, 1, 2, 5], // thời gian xử lý request (s)
+});
+
+// ===== Middleware đo metrics =====
 app.use((req, res, next) => {
-  requestCounter.inc();
+  const end = requestDuration.startTimer();
+
+  res.on('finish', () => {
+    requestCounter.labels(req.method, req.path, res.statusCode).inc();
+    end({ method: req.method, route: req.path, status: res.statusCode });
+  });
+
   next();
 });
 

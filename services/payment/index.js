@@ -3,17 +3,32 @@ const client = require('prom-client'); // npm install prom-client
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Counter metric
-const requestCounter = new client.Counter({
-  name: 'payment_requests_total',
-  help: 'Total requests to Payment Service'
-});
-
 app.use(express.json());
 
-// Middleware tăng counter cho mọi request
+// ===== Prometheus Metrics =====
+const collectDefaultMetrics = client.collectDefaultMetrics;
+collectDefaultMetrics(); // CPU, memory, event loop, etc.
+
+const counter = new client.Counter({
+  name: 'http_requests_total',
+  help: 'Total number of requests',
+  labelNames: ['method', 'route', 'status'],
+});
+
+const histogram = new client.Histogram({
+  name: 'http_request_duration_seconds',
+  help: 'Request duration in seconds',
+  labelNames: ['method', 'route', 'status'],
+  buckets: [0.1, 0.5, 1, 2, 5],
+});
+
+// Middleware đo request
 app.use((req, res, next) => {
-  requestCounter.inc();
+  const end = histogram.startTimer();
+  res.on('finish', () => {
+    counter.labels(req.method, req.path, res.statusCode).inc();
+    end({ method: req.method, route: req.path, status: res.statusCode });
+  });
   next();
 });
 

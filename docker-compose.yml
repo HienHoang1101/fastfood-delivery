@@ -1,6 +1,17 @@
 version: '3.8'
 
 services:
+  user-db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: users_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5433:5432"
+    volumes:
+      - user_db_data:/var/lib/postgresql/data
+
   user:
     build: ./services/user
     container_name: user-service
@@ -8,6 +19,15 @@ services:
       - "3001:3000"
     environment:
       - PORT=3000
+      - DB_HOST=user-db
+      - DB_USER=postgres
+      - DB_PASSWORD=password
+      - DB_NAME=users_db
+      - DB_PORT=5432
+      - JWT_SECRET=supersecret
+    depends_on:
+      - user-db
+
 
   product:
     build: ./services/product
@@ -55,3 +75,15 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=admin
     depends_on:
       - prometheus
+  alertmanager:
+    image: prom/alertmanager
+    container_name: alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+    depends_on:
+      - prometheus
+      
+volumes:
+  user_db_data:

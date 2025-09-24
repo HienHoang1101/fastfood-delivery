@@ -17,3 +17,11 @@ scrape_configs:
   - job_name: 'payment-service'
     static_configs:
       - targets: ['payment:3000']
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - "alertmanager:9093"
+
+rule_files:
+  - "alert.rules.yml"
