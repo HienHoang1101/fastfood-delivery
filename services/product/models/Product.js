@@ -1,14 +1,19 @@
 // services/product/models/Product.js
 const { DataTypes } = require('sequelize');
-const sequelize = require('../db'); // Import sequelize instance
+const sequelize = require('../db');
 
 const Product = sequelize.define('Product', {
+  id: {
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    autoIncrement: true,
+  },
   name: {
     type: DataTypes.STRING,
     allowNull: false,
   },
   description: {
-    type: DataTypes.TEXT,
+    type: DataTypes.STRING,
   },
   price: {
     type: DataTypes.DECIMAL(10, 2),
@@ -17,20 +22,19 @@ const Product = sequelize.define('Product', {
   category: {
     type: DataTypes.STRING,
   },
+  stock: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+  },
+  image_url: {
+    type: DataTypes.STRING,
+  },
   is_available: {
     type: DataTypes.BOOLEAN,
     defaultValue: true,
   },
-  image_url: {
-    type: DataTypes.TEXT,
-  },
-  stock: {
-    type: DataTypes.INTEGER,
-    defaultValue: 0,
-  },
 }, {
-  tableName: 'products', // Specify the table name
-  underscored: true, // Use snake_case for column names
+  timestamps: true,  // Tự động thêm createdAt, updatedAt
 });
 
 module.exports = Product;

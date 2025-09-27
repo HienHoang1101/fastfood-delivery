@@ -1,6 +1,7 @@
 // services/order/db.js
 const { Sequelize } = require('sequelize');
 
+// Kết nối tới PostgreSQL
 const sequelize = new Sequelize(
   process.env.DB_NAME || 'order_db',  // Database name
   process.env.DB_USER || 'postgres',  // Database user

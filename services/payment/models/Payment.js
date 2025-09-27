@@ -3,21 +3,25 @@ const { DataTypes } = require('sequelize');
 const sequelize = require('../db');
 
 const Payment = sequelize.define('Payment', {
+  id: {
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    autoIncrement: true,
+  },
   order_id: {
     type: DataTypes.INTEGER,
     allowNull: false,
   },
   amount: {
-    type: DataTypes.DECIMAL(12, 2),
+    type: DataTypes.DECIMAL(10, 2),
     allowNull: false,
   },
   status: {
-    type: DataTypes.ENUM('initiated', 'completed', 'failed'),
-    defaultValue: 'initiated',
+    type: DataTypes.STRING,
+    defaultValue: 'pending',  // Default status
   },
 }, {
-  tableName: 'payments',
-  underscored: true,   // Use snake_case for column names
+  timestamps: true,  // Tự động thêm createdAt, updatedAt
 });
 
 module.exports = Payment;

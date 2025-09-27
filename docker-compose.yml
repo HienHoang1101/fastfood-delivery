@@ -8,18 +8,17 @@ services:
       POSTGRES_DB: product_db
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
-    ports: 
+    ports:
       - "5434:5432"  # PostgreSQL container sẽ nghe ở cổng 5432
     volumes:
       - product_db_data:/var/lib/postgresql/data
     networks:
       - fastfood
 
-  # Product Service
   product:
     build: ./services/product
     container_name: product-service
-    ports: 
+    ports:
       - "3002:3000"
     environment:
       - PORT=3000
@@ -32,6 +31,12 @@ services:
       - product-db
     networks:
       - fastfood
+    healthcheck:
+        test: ["CMD", "pg_isready", "-U", "postgres", "-d", "product_db"]
+        interval: 10s 
+        retries: 5
+        start_period: 15s
+        timeout: 5s
 
   # PostgreSQL cho Order Service
   order-db:
@@ -47,7 +52,6 @@ services:
     networks:
       - fastfood
 
-  # Order Service
   order:
     build: ./services/order
     container_name: order-service
@@ -60,12 +64,18 @@ services:
       - DB_PASSWORD=password
       - DB_NAME=order_db
       - DB_PORT=5432
-      - PRODUCT_URL=http://product:3000  # Liên kết với Product Service
+      - PRODUCT_URL=http://product:3000
     depends_on:
       - order-db
       - product
     networks:
       - fastfood
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "order_db"]
+      interval: 10s
+      retries: 5
+      start_period: 15s
+      timeout: 5s 
 
   # PostgreSQL cho Payment Service
   payment-db:
@@ -78,8 +88,9 @@ services:
       - "5439:5432"
     volumes:
       - payment_db_data:/var/lib/postgresql/data
+    networks:
+      - fastfood
 
-  # Payment Service
   payment:
     build: ./services/payment
     container_name: payment-service
@@ -92,13 +103,19 @@ services:
       - DB_PASSWORD=password
       - DB_NAME=payment_db
       - DB_PORT=5432
-      - ORDER_URL=http://order:3000  # Liên kết với Order Service
+      - ORDER_URL=http://order:3000
     depends_on:
       - payment-db
       - order
     networks:
       - fastfood
-
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "payment_db"]
+      interval: 10s
+      retries: 5
+      start_period: 15s
+      timeout: 5s
+    
   # PostgreSQL cho User Service
   user-db:
     image: postgres:15
@@ -107,9 +124,17 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
     ports: 
-      - "5433:5432"  # PostgreSQL container sẽ nghe ở cổng 5432
+      - "5433:5432"
     volumes:
       - user_db_data:/var/lib/postgresql/data
+    networks:
+      - fastfood
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "user_db"]
+      interval: 10s
+      retries: 5
+      start_period: 15s
+      timeout: 5s
 
   # User Service
   user:
@@ -129,7 +154,7 @@ services:
     networks:
       - fastfood
 
-  # Prometheus (giám sát)
+  # Prometheus (Giám sát)
   prometheus:
     image: prom/prometheus
     container_name: prometheus
@@ -144,7 +169,7 @@ services:
     networks:
       - fastfood
 
-  # Grafana (hiển thị dữ liệu giám sát)
+  # Grafana (Hiển thị dữ liệu giám sát)
   grafana:
     image: grafana/grafana
     container_name: grafana
@@ -157,7 +182,7 @@ services:
     networks:
       - fastfood
 
-  # Optional: pgAdmin (công cụ quản lý PostgreSQL qua web)
+  # pgAdmin (Công cụ quản lý PostgreSQL)
   pgadmin:
     image: dpage/pgadmin4
     container_name: pgadmin
@@ -165,7 +190,7 @@ services:
       PGADMIN_DEFAULT_EMAIL: admin@admin.com
       PGADMIN_DEFAULT_PASSWORD: admin
     ports:
-      - "5050:80"  # Truy cập qua http://localhost:5050
+      - "5050:80"
     depends_on:
       - product-db
       - order-db
@@ -174,7 +199,7 @@ services:
       - fastfood
 
 networks:
-  fastfood: # Kết nối các service vào mạng riêng
+  fastfood:
     driver: bridge
 
 volumes:
@@ -182,3 +207,4 @@ volumes:
   order_db_data:
   payment_db_data:
   user_db_data:
+  pgadmin_data:

@@ -3,29 +3,37 @@ const { DataTypes } = require('sequelize');
 const sequelize = require('../db');
 
 const OrderItem = sequelize.define('OrderItem', {
-  order_id: {
+  id: {
     type: DataTypes.INTEGER,
-    allowNull: false,
+    primaryKey: true,
+    autoIncrement: true,
   },
   product_id: {
     type: DataTypes.INTEGER,
     allowNull: false,
   },
-  quantity: {
-    type: DataTypes.INTEGER,
-    defaultValue: 1,
+  name: {
+    type: DataTypes.STRING,
+    allowNull: false,
   },
   price: {
-    type: DataTypes.DECIMAL(12, 2),
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: false,
+  },
+  quantity: {
+    type: DataTypes.INTEGER,
     allowNull: false,
   },
   line_total: {
-    type: DataTypes.DECIMAL(12, 2),
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: false,
+  },
+  order_id: {
+    type: DataTypes.INTEGER,
     allowNull: false,
   },
 }, {
-  tableName: 'order_items',
-  underscored: true,
+  timestamps: true,
 });
 
 module.exports = OrderItem;

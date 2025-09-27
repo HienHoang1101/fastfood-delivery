@@ -1,3 +1,4 @@
+// services/order/index.js
 const express = require('express');
 const axios = require('axios');
 const Order = require('./models/Order');
@@ -12,39 +13,37 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// ===== Default Metrics (CPU, memory, event loop, heap, etc.) =====
+// ===== Default Metrics =====
 client.collectDefaultMetrics();
 
-// === Custom Metric ===
+// Custom Metrics
 const requestCounter = new client.Counter({
-  name: 'user_requests_total',
-  help: 'Total requests to User Service',
+  name: 'order_requests_total',
+  help: 'Total requests to Order Service',
   labelNames: ['method', 'route', 'status'],
 });
 
 const requestDuration = new client.Histogram({
-  name: 'user_request_duration_seconds',
-  help: 'Request duration in seconds for User Service',
+  name: 'order_request_duration_seconds',
+  help: 'Request duration in seconds for Order Service',
   labelNames: ['method', 'route', 'status'],
-  buckets: [0.1, 0.5, 1, 2, 5], // thời gian xử lý request (s)
+  buckets: [0.1, 0.5, 1, 2, 5],
 });
 
-// ===== Middleware đo metrics =====
+// Middleware đo metrics
 app.use((req, res, next) => {
   const end = requestDuration.startTimer();
-
   res.on('finish', () => {
     requestCounter.labels(req.method, req.path, res.statusCode).inc();
     end({ method: req.method, route: req.path, status: res.statusCode });
   });
-
   next();
 });
 
 // ===== Create Order =====
 app.post('/orders', async (req, res) => {
   try {
-    const { items } = req.body; // { productId, quantity }
+    const { userId, items } = req.body;
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: 'Items are required' });
     }
@@ -61,8 +60,10 @@ app.post('/orders', async (req, res) => {
     // Tính tổng tiền
     const total = productDetails.reduce((acc, item) => acc + Number(item.lineTotal), 0).toFixed(2);
 
-    // Lưu đơn hàng và order items vào DB
-    const order = await Order.create({ user_id: req.body.userId, total_price: total, status: 'pending' });
+    // Lưu đơn hàng vào DB
+    const order = await Order.create({ user_id: userId, total_price: total, status: 'pending' });
+
+    // Lưu order items
     await OrderItem.bulkCreate(productDetails.map((item) => ({ ...item, order_id: order.id })));
 
     res.status(201).json({ orderId: order.id, total, status: order.status });
@@ -74,24 +75,8 @@ app.post('/orders', async (req, res) => {
 // ===== Get Order List =====
 app.get('/orders', async (req, res) => {
   try {
-    const orders = await Order.findAll({
-      where: { user_id: req.query.userId },
-      include: [OrderItem],
-    });
+    const orders = await Order.findAll({ where: { user_id: req.query.userId }, include: [OrderItem] });
     res.json(orders);
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-// ===== Get Order by ID =====
-app.get('/orders/:id', async (req, res) => {
-  try {
-    const order = await Order.findByPk(req.params.id, {
-      include: [OrderItem],
-    });
-    if (!order) return res.status(404).json({ error: 'Order not found' });
-    res.json(order);
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
@@ -103,6 +88,7 @@ app.put('/orders/:id/status', async (req, res) => {
     const { status } = req.body;
     const order = await Order.findByPk(req.params.id);
     if (!order) return res.status(404).json({ error: 'Order not found' });
+
     order.status = status;
     await order.save();
     res.json(order);
@@ -110,6 +96,12 @@ app.put('/orders/:id/status', async (req, res) => {
     res.status(400).json({ error: e.message });
   }
 });
+
+// Route mặc định để kiểm tra nếu server đang chạy
+app.get('/', (req, res) => {
+  res.send('User Service is running');
+});
+
 
 // ===== Health check =====
 app.get('/health', async (_req, res) => {
@@ -121,7 +113,7 @@ app.get('/health', async (_req, res) => {
   }
 });
 
-// Metrics endpoint cho Prometheus
+// Metrics endpoint
 app.get('/metrics', async (req, res) => {
   res.set('Content-Type', client.register.contentType);
   res.end(await client.register.metrics());
@@ -131,7 +123,7 @@ app.get('/metrics', async (req, res) => {
 (async () => {
   try {
     await sequelize.authenticate();
-    await sequelize.sync(); // Ensure DB tables are created
+    await sequelize.sync();  // Ensure DB tables are created
     app.listen(PORT, () => console.log(`Order Service running on port ${PORT}`));
   } catch (e) {
     console.error('Unable to connect to the database:', e);
