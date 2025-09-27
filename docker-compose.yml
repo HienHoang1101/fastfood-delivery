@@ -1,49 +1,25 @@
 version: '3.8'
 
 services:
-  user-db:
-    image: postgres:15
-    environment:
-      POSTGRES_DB: users_db
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-    ports:
-      - "5433:5432"
-    volumes:
-      - user_db_data:/var/lib/postgresql/data
-
-  user:
-    build: ./services/user
-    container_name: user-service
-    ports:
-      - "3001:3000"
-    environment:
-      - PORT=3000
-      - DB_HOST=user-db
-      - DB_USER=postgres
-      - DB_PASSWORD=password
-      - DB_NAME=users_db
-      - DB_PORT=5432
-      - JWT_SECRET=supersecret
-    depends_on:
-      - user-db
-
-
+  # PostgreSQL cho Product Service
   product-db:
     image: postgres:15
     environment:
       POSTGRES_DB: product_db
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
-    ports:
-      - "5434:5432"
+    ports: 
+      - "5434:5432"  # PostgreSQL container sẽ nghe ở cổng 5432
     volumes:
       - product_db_data:/var/lib/postgresql/data
+    networks:
+      - fastfood
 
+  # Product Service
   product:
     build: ./services/product
     container_name: product-service
-    ports:
+    ports: 
       - "3002:3000"
     environment:
       - PORT=3000
@@ -54,8 +30,24 @@ services:
       - DB_PORT=5432
     depends_on:
       - product-db
+    networks:
+      - fastfood
 
+  # PostgreSQL cho Order Service
+  order-db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: order_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5438:5432"
+    volumes:
+      - order_db_data:/var/lib/postgresql/data
+    networks:
+      - fastfood
 
+  # Order Service
   order:
     build: ./services/order
     container_name: order-service
@@ -63,7 +55,31 @@ services:
       - "3003:3000"
     environment:
       - PORT=3000
+      - DB_HOST=order-db
+      - DB_USER=postgres
+      - DB_PASSWORD=password
+      - DB_NAME=order_db
+      - DB_PORT=5432
+      - PRODUCT_URL=http://product:3000  # Liên kết với Product Service
+    depends_on:
+      - order-db
+      - product
+    networks:
+      - fastfood
 
+  # PostgreSQL cho Payment Service
+  payment-db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: payment_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5439:5432"
+    volumes:
+      - payment_db_data:/var/lib/postgresql/data
+
+  # Payment Service
   payment:
     build: ./services/payment
     container_name: payment-service
@@ -71,20 +87,64 @@ services:
       - "3004:3000"
     environment:
       - PORT=3000
+      - DB_HOST=payment-db
+      - DB_USER=postgres
+      - DB_PASSWORD=password
+      - DB_NAME=payment_db
+      - DB_PORT=5432
+      - ORDER_URL=http://order:3000  # Liên kết với Order Service
+    depends_on:
+      - payment-db
+      - order
+    networks:
+      - fastfood
 
+  # PostgreSQL cho User Service
+  user-db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: user_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports: 
+      - "5433:5432"  # PostgreSQL container sẽ nghe ở cổng 5432
+    volumes:
+      - user_db_data:/var/lib/postgresql/data
+
+  # User Service
+  user:
+    build: ./services/user
+    container_name: user-service
+    ports: 
+      - "3001:3000"
+    environment:
+      - PORT=3000
+      - DB_HOST=user-db
+      - DB_USER=postgres
+      - DB_PASSWORD=password
+      - DB_NAME=user_db
+      - DB_PORT=5432
+    depends_on:
+      - user-db
+    networks:
+      - fastfood
+
+  # Prometheus (giám sát)
   prometheus:
     image: prom/prometheus
     container_name: prometheus
     ports:
       - "9090:9090"
     volumes:
-      - ./monitoring:/etc/prometheus
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
     depends_on:
-      - user
       - product
       - order
       - payment
+    networks:
+      - fastfood
 
+  # Grafana (hiển thị dữ liệu giám sát)
   grafana:
     image: grafana/grafana
     container_name: grafana
@@ -94,16 +154,31 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=admin
     depends_on:
       - prometheus
-  alertmanager:
-    image: prom/alertmanager
-    container_name: alertmanager
+    networks:
+      - fastfood
+
+  # Optional: pgAdmin (công cụ quản lý PostgreSQL qua web)
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
     ports:
-      - "9093:9093"
-    volumes:
-      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+      - "5050:80"  # Truy cập qua http://localhost:5050
     depends_on:
-      - prometheus
-      
+      - product-db
+      - order-db
+      - payment-db
+    networks:
+      - fastfood
+
+networks:
+  fastfood: # Kết nối các service vào mạng riêng
+    driver: bridge
+
 volumes:
-  user_db_data:
   product_db_data:
+  order_db_data:
+  payment_db_data:
+  user_db_data:
