@@ -1,15 +1,16 @@
 const { Sequelize } = require('sequelize');
 
-// Kết nối tới PostgreSQL database với các biến môi trường
+
 const sequelize = new Sequelize(
-  process.env.DB_NAME || 'user_db',
-  process.env.DB_USER || 'postgres',
-  process.env.DB_PASSWORD || 'password',
+  process.env.DB_NAME || 'user_db',  // Tên database
+  process.env.DB_USER || 'postgres', // Tên người dùng
+  process.env.DB_PASSWORD || 'password', // Mật khẩu
   {
-    host: process.env.DB_HOST || 'localhost',
-    dialect: 'postgres',
-    port: process.env.DB_PORT || 5432,
-    logging: false,  // Tắt logging của Sequelize
+    host: process.env.DB_HOST || 'localhost', // Host PostgreSQL
+    dialect: 'postgres', // PostgreSQL dialect
+    port: process.env.DB_PORT || 5432, // Port PostgreSQL
+    logging: false, // Tắt logging (hoặc bật nếu cần)
   }
 );
+
 module.exports = sequelize;

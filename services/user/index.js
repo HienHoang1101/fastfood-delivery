@@ -1,31 +1,19 @@
-require('dotenv').config();  // Load các biến môi trường từ .env
+// services/user/index.js
+require('dotenv').config();
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const client = require('prom-client');
+const sequelize = require('./db');
 const User = require('./models/User');
-const client = require('prom-client'); // Giám sát Prometheus
-
-const { Sequelize } = require('sequelize');
-const sequelize = new Sequelize(
-  process.env.DB_NAME || 'user_db',
-  process.env.DB_USER || 'postgres',
-  process.env.DB_PASSWORD || 'password',
-  {
-    host: process.env.DB_HOST || 'localhost',
-    dialect: 'postgres',
-    port: process.env.DB_PORT || 5432,
-    logging: false,
-  }
-);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret'; // Lấy JWT_SECRET từ môi trường
-const MAX_LOGIN_ATTEMPTS = 5; // Giới hạn số lần thử đăng nhập
+const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
 
 app.use(express.json());
 
-// ===== Default Metrics =====
+// ===== Prometheus Default Metrics =====
 client.collectDefaultMetrics();
 
 // ===== Custom Metrics =====
@@ -34,15 +22,14 @@ const requestCounter = new client.Counter({
   help: 'Total requests to User Service',
   labelNames: ['method', 'route', 'status'],
 });
-
 const requestDuration = new client.Histogram({
   name: 'user_request_duration_seconds',
   help: 'Request duration in seconds for User Service',
   labelNames: ['method', 'route', 'status'],
-  buckets: [0.1, 0.5, 1, 2, 5], // Thời gian xử lý request (s)
+  buckets: [0.1, 0.5, 1, 2, 5],
 });
 
-// ===== Middleware đo metrics =====
+// Middleware đo metrics
 app.use((req, res, next) => {
   const end = requestDuration.startTimer();
   res.on('finish', () => {
@@ -52,7 +39,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// ===== Register =====
+// ===== Register Endpoint =====
 app.post('/register', async (req, res) => {
   try {
     const { username, email, password } = req.body;
@@ -68,64 +55,58 @@ app.post('/register', async (req, res) => {
 
     res.status(201).json({ message: 'User registered', userId: user.id });
   } catch (e) {
-    console.error('Error in registration:', e.message);
-    res.status(400).json({ error: e.message });
+    console.error('Registration error:', e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 
-// ===== Login =====
+// ===== Login Endpoint =====
 app.post('/login', async (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
-
   try {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+
     const user = await User.findOne({ where: { email } });
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
 
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
 
-    // Thêm cơ chế giới hạn số lần đăng nhập
-    const token = jwt.sign(
-      { id: user.id, email: user.email },
-      JWT_SECRET,
-      { expiresIn: '1h' }
-    );
+    const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '1h' });
 
     res.json({ message: 'Login successful', token });
   } catch (e) {
-    console.error('Error in login:', e.message);
-    res.status(400).json({ error: e.message });
+    console.error('Login error:', e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 
-// Route mặc định để kiểm tra nếu server đang chạy
-app.get('/', (req, res) => {
-  res.send('User Service is running');
-});
-
-
-// ===== Health check =====
+// ===== Health Check =====
 app.get('/health', async (_req, res) => {
   try {
-    await sequelize.authenticate(); // Kiểm tra kết nối tới DB
+    await sequelize.authenticate();
     res.json({ status: 'ok' });
   } catch (e) {
     res.status(500).json({ status: 'down', error: e.message });
   }
 });
 
-// ===== Metrics endpoint for Prometheus =====
+// ===== Metrics Endpoint =====
 app.get('/metrics', async (req, res) => {
   res.set('Content-Type', client.register.contentType);
   res.end(await client.register.metrics());
 });
 
-// Start the server with DB synchronization
+// ===== Default Route =====
+app.get('/', (_req, res) => {
+  res.send('User Service is running');
+});
+
+// ===== Start Server & Sync DB =====
 (async () => {
   try {
-    await sequelize.authenticate(); // Kiểm tra kết nối DB
-    await sequelize.sync(); // Đồng bộ hóa bảng trong DB
+    await sequelize.authenticate();
+    await sequelize.sync({ alter: true }); // Tạo bảng users nếu chưa có
     app.listen(PORT, () => console.log(`User Service running on port ${PORT}`));
   } catch (e) {
     console.error('Unable to connect to the database:', e);
