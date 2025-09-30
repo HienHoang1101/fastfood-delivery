@@ -1,16 +1,24 @@
-// services/payment/index.js
+const axiosRetry = require('axios-retry');
 const express = require('express');
 const Payment = require('./models/Payment');
 const sequelize = require('./db');
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
-const client = require('prom-client'); // Giám sát Prometheus
+const client = require('prom-client');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
+
+// Cấu hình retry cho axios
+axiosRetry(axios, {
+  retries: 3, // Số lần thử lại
+  retryDelay: axiosRetry.exponentialDelay, // Phương pháp delay theo exponential
+  shouldResetTimeout: true, // Reset timeout khi retry
+  retryCondition: (error) => error.response && error.response.status >= 500, // Retry khi gặp lỗi server (5xx)
+});
 
 // ===== Default Metrics =====
 client.collectDefaultMetrics();
@@ -33,8 +41,8 @@ const requestDuration = new client.Histogram({
 app.use((req, res, next) => {
   const end = requestDuration.startTimer();
   res.on('finish', () => {
-    requestCounter.labels(req.method, req.path, res.statusCode).inc();
-    end({ method: req.method, route: req.path, status: res.statusCode });
+    requestCounter.labels(req.method, req.path, String(res.statusCode)).inc();
+    end({ method: req.method, route: req.path, status: String(res.statusCode) });
   });
   next();
 });
@@ -45,7 +53,9 @@ app.post('/pay', async (req, res) => {
     const { orderId, amount } = req.body;
 
     // Kiểm tra xem đơn hàng có tồn tại không (gọi từ Order Service)
-    const { data: order } = await axios.get(`http://order:3003/orders/${orderId}`);
+    const { data: order } = await axios.get(
+      `http://order:3003/orders/${orderId}`
+    );
     if (!order) {
       return res.status(404).json({ error: 'Order not found' });
     }
@@ -54,29 +64,48 @@ app.post('/pay', async (req, res) => {
     const payment = await Payment.create({ order_id: orderId, amount, status: 'paid' });
 
     // Cập nhật trạng thái của Order (đơn hàng đã được thanh toán)
-    await axios.put(`http://order:3003/orders/${orderId}/status`, { status: 'paid' });
-
-    res.status(201).json({ message: 'Payment processed successfully', payment });
+    try {
+      await axios.put(`http://order:3003/orders/${orderId}/status`, { status: 'paid' });
+      res.status(201).json({ message: 'Payment processed successfully', payment });
+    } catch (err) {
+    if (e.response && e.response.data) {
+      // Upstream service error (e.g., Order Service)
+      res.status(e.response.status || 502).json({
+        error: 'Upstream service error',
+        details: e.response.data,
+      });
+    } else if (e.name === 'SequelizeValidationError') {
+      // Validation error from Sequelize
+      res.status(400).json({
+        error: 'Validation error',
+        details: e.errors.map(err => err.message),
+      });
+    } else {
+      // Other errors
+      res.status(400).json({ error: e.message });
+    }
+      await payment.destroy();
+      res.status(500).json({ error: 'Failed to update order status, payment rolled back', details: err.message });
+    }
   } catch (e) {
-    res.status(400).json({ error: e.message });
+    if (e.response && e.response.data) {
+      // Upstream service error (e.g., Order Service)
+      res.status(e.response.status || 502).json({
+        error: 'Upstream service error',
+        details: e.response.data,
+      });
+    } else if (e.name === 'SequelizeValidationError') {
+      // Validation error from Sequelize
+      res.status(400).json({
+        error: 'Validation error',
+        details: e.errors.map(err => err.message),
+      });
+    } else {
+      // Other errors
+      res.status(400).json({ error: e.message });
+    }
   }
 });
-
-// ===== Get Payment List =====
-app.get('/payments', async (req, res) => {
-  try {
-    const payments = await Payment.findAll({ where: { order_id: req.query.orderId } });
-    res.json(payments);
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-// Route mặc định để kiểm tra nếu server đang chạy
-app.get('/', (req, res) => {
-  res.send('User Service is running');
-});
-
 
 // ===== Health check =====
 app.get('/health', async (_req, res) => {
@@ -94,11 +123,13 @@ app.get('/metrics', async (req, res) => {
   res.end(await client.register.metrics());
 });
 
-// Start the server
+// Start server
 (async () => {
   try {
     await sequelize.authenticate();
-    await sequelize.sync();  // Ensure DB tables are created
+    if (process.env.NODE_ENV !== 'production') {
+      await sequelize.sync(); // Ensure DB tables are created only in non-production
+    }
     app.listen(PORT, () => console.log(`Payment Service running on port ${PORT}`));
   } catch (e) {
     console.error('Unable to connect to the database:', e);

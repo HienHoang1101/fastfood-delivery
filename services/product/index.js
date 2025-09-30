@@ -8,6 +8,7 @@ require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const PRODUCT_SERVICE_URL = process.env.PRODUCT_SERVICE_URL || 'http://product:3002';
 
 app.use(express.json());
 
