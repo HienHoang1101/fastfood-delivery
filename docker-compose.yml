@@ -1,19 +1,92 @@
 version: '3.8'
 
 services:
-  # PostgreSQL cho Product Service
+  # ===== API GATEWAY =====
+  api-gateway:
+    build: ./services/api-gateway
+    container_name: api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - NODE_ENV=development
+      - JWT_SECRET=your-secret-key-change-in-production
+      - ALLOWED_ORIGINS=http://localhost:3000
+      - USER_SERVICE_URL=http://user:3000
+      - PRODUCT_SERVICE_URL=http://product:3000
+      - ORDER_SERVICE_URL=http://order:3000
+      - PAYMENT_SERVICE_URL=http://payment:3000
+    depends_on:
+      - user
+      - product
+      - order
+      - payment
+    networks:
+      - fastfood
+    restart: unless-stopped
+
+  # ===== USER SERVICE =====
+  user-db:
+    image: postgres:15
+    container_name: user-db
+    environment:
+      POSTGRES_DB: user_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports: 
+      - "5433:5432"
+    volumes:
+      - user_db_data:/var/lib/postgresql/data
+    networks:
+      - fastfood
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d user_db"]
+      interval: 10s
+      retries: 5
+      start_period: 15s
+      timeout: 5s
+
+  user:
+    build: ./services/user
+    container_name: user-service
+    ports:
+      - "3001:3000"
+    environment:
+      - PORT=3000
+      - DB_HOST=user-db
+      - DB_USER=postgres
+      - DB_PASSWORD=password
+      - DB_NAME=user_db
+      - DB_PORT=5432
+      - JWT_SECRET=your-secret-key-change-in-production
+      - JWT_EXPIRES_IN=24h
+    depends_on:
+      user-db:
+        condition: service_healthy
+    networks:
+      - fastfood
+    restart: unless-stopped
+
+  # ===== PRODUCT SERVICE =====
   product-db:
     image: postgres:15
+    container_name: product-db
     environment:
       POSTGRES_DB: product_db
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
     ports:
-      - "5434:5432"  # PostgreSQL container sẽ nghe ở cổng 5432
+      - "5434:5432"
     volumes:
       - product_db_data:/var/lib/postgresql/data
     networks:
       - fastfood
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d product_db"]
+      interval: 10s
+      retries: 5
+      start_period: 15s
+      timeout: 5s
 
   product:
     build: ./services/product
@@ -28,19 +101,16 @@ services:
       - DB_NAME=product_db
       - DB_PORT=5432
     depends_on:
-      - product-db
+      product-db:
+        condition: service_healthy
     networks:
       - fastfood
-    healthcheck:
-        test: ["CMD", "pg_isready", "-U", "postgres", "-d", "product_db"]
-        interval: 10s 
-        retries: 5
-        start_period: 15s
-        timeout: 5s
+    restart: unless-stopped
 
-  # PostgreSQL cho Order Service
+  # ===== ORDER SERVICE =====
   order-db:
     image: postgres:15
+    container_name: order-db
     environment:
       POSTGRES_DB: order_db
       POSTGRES_USER: postgres
@@ -51,6 +121,12 @@ services:
       - order_db_data:/var/lib/postgresql/data
     networks:
       - fastfood
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d order_db"]
+      interval: 10s
+      retries: 5
+      start_period: 15s
+      timeout: 5s
 
   order:
     build: ./services/order
@@ -66,20 +142,18 @@ services:
       - DB_PORT=5432
       - PRODUCT_URL=http://product:3000
     depends_on:
-      - order-db
-      - product
+      order-db:
+        condition: service_healthy
+      product:
+        condition: service_started
     networks:
       - fastfood
-    healthcheck:
-      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "order_db"]
-      interval: 10s
-      retries: 5
-      start_period: 15s
-      timeout: 5s 
+    restart: unless-stopped
 
-  # PostgreSQL cho Payment Service
+  # ===== PAYMENT SERVICE =====
   payment-db:
     image: postgres:15
+    container_name: payment-db
     environment:
       POSTGRES_DB: payment_db
       POSTGRES_USER: postgres
@@ -90,6 +164,12 @@ services:
       - payment_db_data:/var/lib/postgresql/data
     networks:
       - fastfood
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d payment_db"]
+      interval: 10s
+      retries: 5
+      start_period: 15s
+      timeout: 5s
 
   payment:
     build: ./services/payment
@@ -105,112 +185,106 @@ services:
       - DB_PORT=5432
       - ORDER_URL=http://order:3000
     depends_on:
-      - payment-db
-      - order
+      payment-db:
+        condition: service_healthy
+      order:
+        condition: service_started
     networks:
       - fastfood
-    healthcheck:
-      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "payment_db"]
-      interval: 10s
-      retries: 5
-      start_period: 15s
-      timeout: 5s
-    
-  # PostgreSQL cho User Service
-  user-db:
-    image: postgres:15
-    environment:
-      POSTGRES_DB: user_db
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-    ports: 
-      - "5433:5432"
-    volumes:
-      - user_db_data:/var/lib/postgresql/data
-    networks:
-      - fastfood
-    healthcheck:
-      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "user_db"]
-      interval: 10s
-      retries: 5
-      start_period: 15s
-      timeout: 5s
+    restart: unless-stopped
 
-  # User Service
-  user:
-    build: ./services/user
-    container_name: user-service
-    ports:
-      - "3001:3000"
-    environment:
-      - PORT=3000
-      - DB_HOST=user-db
-      - DB_USER=postgres
-      - DB_PASSWORD=password
-      - DB_NAME=user_db
-      - DB_PORT=5432
-    depends_on:
-      - user-db
-    networks:
-      - fastfood
-    healthcheck:
-      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "user_db"]
-      interval: 10s
-      retries: 5
-      start_period: 15s
-      timeout: 5s
-
-  # Prometheus (Giám sát)
+  # ===== PROMETHEUS (MONITORING) =====
   prometheus:
-    image: prom/prometheus
+    image: prom/prometheus:latest
     container_name: prometheus
     ports:
       - "9090:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./monitoring/alert.rules.yml:/etc/prometheus/alert.rules.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
     depends_on:
+      - api-gateway
+      - user
       - product
       - order
       - payment
     networks:
       - fastfood
+    restart: unless-stopped
 
-  # Grafana (Hiển thị dữ liệu giám sát)
+  # ===== ALERTMANAGER =====
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+      - alertmanager_data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    networks:
+      - fastfood
+    restart: unless-stopped
+
+  # ===== GRAFANA (VISUALIZATION) =====
   grafana:
-    image: grafana/grafana
+    image: grafana/grafana:latest
     container_name: grafana
     ports:
       - "3005:3000"
     environment:
+      - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
     depends_on:
       - prometheus
     networks:
       - fastfood
+    restart: unless-stopped
 
-  # pgAdmin (Công cụ quản lý PostgreSQL)
+  # ===== PGADMIN (DATABASE MANAGEMENT) =====
   pgadmin:
-    image: dpage/pgadmin4
+    image: dpage/pgadmin4:latest
     container_name: pgadmin
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@admin.com
       PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
     ports:
       - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
     depends_on:
+      - user-db
       - product-db
       - order-db
       - payment-db
     networks:
       - fastfood
+    restart: unless-stopped
 
 networks:
   fastfood:
     driver: bridge
 
 volumes:
+  user_db_data:
   product_db_data:
   order_db_data:
   payment_db_data:
-  user_db_data:
+  prometheus_data:
+  alertmanager_data:
+  grafana_data:
   pgadmin_data:

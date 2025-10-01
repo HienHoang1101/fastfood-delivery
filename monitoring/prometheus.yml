@@ -1,27 +1,77 @@
 global:
-  scrape_interval: 5s
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'fastfood-delivery'
+    environment: 'development'
 
-scrape_configs:
-  - job_name: 'user-service'
-    static_configs:
-      - targets: ['user:3000']
-
-  - job_name: 'product-service'
-    static_configs:
-      - targets: ['product:3000']
-
-  - job_name: 'order-service'
-    static_configs:
-      - targets: ['order:3000']
-
-  - job_name: 'payment-service'
-    static_configs:
-      - targets: ['payment:3000']
+# Alertmanager configuration
 alerting:
   alertmanagers:
     - static_configs:
         - targets:
-            - "alertmanager:9093"
+            - 'alertmanager:9093'
 
+# Load rules once and periodically evaluate them
 rule_files:
-  - "alert.rules.yml"
+  - 'alert.rules.yml'
+
+# Scrape configurations
+scrape_configs:
+  # API Gateway
+  - job_name: 'api-gateway'
+    static_configs:
+      - targets: ['api-gateway:8080']
+        labels:
+          service: 'api-gateway'
+          tier: 'gateway'
+    metrics_path: '/health'
+    scrape_interval: 10s
+
+  # User Service
+  - job_name: 'user-service'
+    static_configs:
+      - targets: ['user:3000']
+        labels:
+          service: 'user'
+          tier: 'backend'
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Product Service
+  - job_name: 'product-service'
+    static_configs:
+      - targets: ['product:3000']
+        labels:
+          service: 'product'
+          tier: 'backend'
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Order Service
+  - job_name: 'order-service'
+    static_configs:
+      - targets: ['order:3000']
+        labels:
+          service: 'order'
+          tier: 'backend'
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Payment Service
+  - job_name: 'payment-service'
+    static_configs:
+      - targets: ['payment:3000']
+        labels:
+          service: 'payment'
+          tier: 'backend'
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+          tier: 'monitoring'
