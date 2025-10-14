@@ -1,7 +1,7 @@
 // ==========================================
 // frontend/src/pages/Products/index.jsx
 // ==========================================
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Container,
   Typography,
@@ -32,24 +32,20 @@ const Products = () => {
   const [maxPrice, setMaxPrice] = useState('');
   const [inStockOnly, setInStockOnly] = useState(false);
 
-  useEffect(() => {
-    fetchCategories();
-  }, []);
-
-  useEffect(() => {
-    fetchProducts();
-  }, [page, selectedCategory, searchTerm, minPrice, maxPrice, inStockOnly]);
-
-  const fetchCategories = async () => {
+  const fetchCategories = useCallback(async () => {
     try {
       const data = await productService.getCategories();
       setCategories(data);
     } catch (err) {
       console.error('Failed to fetch categories:', err);
     }
-  };
+  }, []);
 
-  const fetchProducts = async () => {
+  useEffect(() => {
+    fetchCategories();
+  }, [fetchCategories]);
+
+  const fetchProducts = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -71,7 +67,11 @@ const Products = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [page, selectedCategory, searchTerm, minPrice, maxPrice, inStockOnly]);
+
+  useEffect(() => {
+    fetchProducts();
+  }, [fetchProducts]);
 
   const handleSearch = (term) => {
     setSearchTerm(term);

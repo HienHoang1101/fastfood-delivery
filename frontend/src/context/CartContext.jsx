@@ -1,4 +1,4 @@
-import React, { createContext, useState, useContext, useEffect } from 'react';
+import React, { createContext, useState, useContext, useEffect, useCallback } from 'react';
 import { toast } from 'react-toastify';
 
 const CartContext = createContext(null);
@@ -7,6 +7,7 @@ export const CartProvider = ({ children }) => {
   const [cartItems, setCartItems] = useState([]);
   const [cartTotal, setCartTotal] = useState(0);
 
+  // Load cart from localStorage on mount
   useEffect(() => {
     const savedCart = localStorage.getItem('cart');
     if (savedCart) {
@@ -18,18 +19,20 @@ export const CartProvider = ({ children }) => {
     }
   }, []);
 
-  useEffect(() => {
-    localStorage.setItem('cart', JSON.stringify(cartItems));
-    calculateTotal();
-  }, [cartItems]);
-
-  const calculateTotal = () => {
+  // Calculate total - use useCallback to memoize
+  const calculateTotal = useCallback(() => {
     const total = cartItems.reduce(
       (sum, item) => sum + item.price * item.quantity,
       0
     );
     setCartTotal(total);
-  };
+  }, [cartItems]);
+
+  // Save to localStorage and recalculate whenever cart changes
+  useEffect(() => {
+    localStorage.setItem('cart', JSON.stringify(cartItems));
+    calculateTotal();
+  }, [cartItems, calculateTotal]);
 
   const addToCart = (product, quantity = 1) => {
     const existingItem = cartItems.find((item) => item.id === product.id);

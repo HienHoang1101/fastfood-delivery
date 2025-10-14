@@ -18,7 +18,6 @@ import {
   ShoppingCart,
   AccountCircle,
   Restaurant,
-  Menu as MenuIcon,
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
