@@ -1,4 +1,3 @@
-// frontend/src/context/CartContext.jsx
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import { toast } from 'react-toastify';
 
@@ -8,7 +7,6 @@ export const CartProvider = ({ children }) => {
   const [cartItems, setCartItems] = useState([]);
   const [cartTotal, setCartTotal] = useState(0);
 
-  // Load cart from localStorage on mount
   useEffect(() => {
     const savedCart = localStorage.getItem('cart');
     if (savedCart) {
@@ -20,13 +18,11 @@ export const CartProvider = ({ children }) => {
     }
   }, []);
 
-  // Save cart to localStorage whenever it changes
   useEffect(() => {
     localStorage.setItem('cart', JSON.stringify(cartItems));
     calculateTotal();
   }, [cartItems]);
 
-  // Calculate cart total
   const calculateTotal = () => {
     const total = cartItems.reduce(
       (sum, item) => sum + item.price * item.quantity,
@@ -35,12 +31,10 @@ export const CartProvider = ({ children }) => {
     setCartTotal(total);
   };
 
-  // Add item to cart
   const addToCart = (product, quantity = 1) => {
     const existingItem = cartItems.find((item) => item.id === product.id);
 
     if (existingItem) {
-      // Update quantity if item already in cart
       setCartItems(
         cartItems.map((item) =>
           item.id === product.id
@@ -50,13 +44,11 @@ export const CartProvider = ({ children }) => {
       );
       toast.success(`Updated ${product.name} quantity in cart`);
     } else {
-      // Add new item to cart
       setCartItems([...cartItems, { ...product, quantity }]);
       toast.success(`Added ${product.name} to cart`);
     }
   };
 
-  // Remove item from cart
   const removeFromCart = (productId) => {
     const item = cartItems.find((item) => item.id === productId);
     setCartItems(cartItems.filter((item) => item.id !== productId));
@@ -65,13 +57,11 @@ export const CartProvider = ({ children }) => {
     }
   };
 
-  // Update item quantity
   const updateQuantity = (productId, quantity) => {
     if (quantity <= 0) {
       removeFromCart(productId);
       return;
     }
-
     setCartItems(
       cartItems.map((item) =>
         item.id === productId ? { ...item, quantity } : item
@@ -79,23 +69,19 @@ export const CartProvider = ({ children }) => {
     );
   };
 
-  // Clear cart
   const clearCart = () => {
     setCartItems([]);
     toast.info('Cart cleared');
   };
 
-  // Get item count
   const getItemCount = () => {
     return cartItems.reduce((total, item) => total + item.quantity, 0);
   };
 
-  // Check if product is in cart
   const isInCart = (productId) => {
     return cartItems.some((item) => item.id === productId);
   };
 
-  // Get item quantity
   const getItemQuantity = (productId) => {
     const item = cartItems.find((item) => item.id === productId);
     return item ? item.quantity : 0;
@@ -116,7 +102,6 @@ export const CartProvider = ({ children }) => {
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
 };
 
-// Custom hook to use cart context
 export const useCart = () => {
   const context = useContext(CartContext);
   if (!context) {

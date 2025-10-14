@@ -1,4 +1,3 @@
-// frontend/src/context/AuthContext.jsx
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import authService from '../services/authService';
 import { toast } from 'react-toastify';
@@ -10,23 +9,19 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
-  // Check authentication status on mount
   useEffect(() => {
     const checkAuth = () => {
       const currentUser = authService.getCurrentUser();
       const token = authService.getToken();
-      
       if (currentUser && token) {
         setUser(currentUser);
         setIsAuthenticated(true);
       }
       setLoading(false);
     };
-
     checkAuth();
   }, []);
 
-  // Register function
   const register = async (userData) => {
     try {
       const data = await authService.register(userData);
@@ -41,7 +36,6 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Login function
   const login = async (email, password) => {
     try {
       const data = await authService.login(email, password);
@@ -56,7 +50,6 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Logout function
   const logout = () => {
     authService.logout();
     setUser(null);
@@ -64,7 +57,6 @@ export const AuthProvider = ({ children }) => {
     toast.info('Logged out successfully');
   };
 
-  // Update profile
   const updateProfile = async (userData) => {
     try {
       const data = await authService.updateProfile(userData);
@@ -91,7 +83,6 @@ export const AuthProvider = ({ children }) => {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
 
-// Custom hook to use auth context
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {
