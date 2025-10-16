@@ -14,6 +14,15 @@ const PRODUCT_SERVICE_URL = process.env.PRODUCT_URL || 'http://product:3000';
 
 app.use(express.json());
 
+// ===== ENVIRONMENT VALIDATION =====
+const requiredEnvVars = ['DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD'];
+const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+
+if (missingEnvVars.length > 0) {
+  console.error('❌ Missing required environment variables:', missingEnvVars);
+  process.exit(1);
+}
+
 // ===== AXIOS RETRY CONFIGURATION =====
 axiosRetry(axios, {
   retries: 3,
@@ -53,7 +62,6 @@ const orderProcessingDuration = new client.Histogram({
   buckets: [0.1, 0.5, 1, 2, 5, 10]
 });
 
-// Middleware đo metrics
 app.use((req, res, next) => {
   const end = () => {
     requestCounter.labels(req.method, req.route?.path || req.path, res.statusCode).inc();
@@ -62,12 +70,12 @@ app.use((req, res, next) => {
   next();
 });
 
-// ===== VALIDATION MIDDLEWARE =====
+// ===== VALIDATION MIDDLEWARE (ENHANCED) =====
 const validateCreateOrder = [
   body('items').isArray({ min: 1 }).withMessage('Items must be a non-empty array'),
-  body('items.*.productId').isInt().withMessage('Product ID must be an integer'),
+  body('items.*.productId').isInt({ min: 1 }).withMessage('Product ID must be a positive integer'),
   body('items.*.quantity').isInt({ min: 1 }).withMessage('Quantity must be at least 1'),
-  body('deliveryAddress').optional().trim().notEmpty(),
+  body('deliveryAddress').optional().trim().notEmpty().withMessage('Delivery address cannot be empty'),
   body('notes').optional().trim()
 ];
 
@@ -88,6 +96,8 @@ const fetchProductDetails = async (productIds) => {
   try {
     const response = await axios.post(`${PRODUCT_SERVICE_URL}/products/bulk`, {
       ids: productIds
+    }, {
+      timeout: 5000
     });
     return response.data;
   } catch (error) {
@@ -101,6 +111,8 @@ const updateProductStock = async (productId, quantity, operation = 'decrement') 
     await axios.patch(`${PRODUCT_SERVICE_URL}/products/${productId}/stock`, {
       quantity,
       operation
+    }, {
+      timeout: 5000
     });
   } catch (error) {
     console.error(`Failed to update stock for product ${productId}:`, error.message);
@@ -110,7 +122,7 @@ const updateProductStock = async (productId, quantity, operation = 'decrement') 
 
 // ===== ORDER ROUTES =====
 
-// Create new order
+// ✅ Create new order (FIXED)
 app.post('/orders', validateCreateOrder, handleValidationErrors, async (req, res) => {
   const endTimer = orderProcessingDuration.startTimer();
   const transaction = await sequelize.transaction();
@@ -123,8 +135,37 @@ app.post('/orders', validateCreateOrder, handleValidationErrors, async (req, res
 
     const { items, deliveryAddress, notes } = req.body;
 
-    // Fetch product details
+    // ✅ FIX 1: Check for duplicate product IDs
     const productIds = items.map(item => item.productId);
+    const uniqueProductIds = new Set(productIds);
+    
+    if (uniqueProductIds.size !== productIds.length) {
+      return res.status(400).json({ 
+        error: 'Duplicate products in order',
+        message: 'Each product can only appear once. Please combine quantities instead.'
+      });
+    }
+
+    // ✅ FIX 2: Validate all quantities are positive
+    const invalidQuantities = items.filter(item => item.quantity <= 0);
+    if (invalidQuantities.length > 0) {
+      return res.status(400).json({ 
+        error: 'Invalid quantities',
+        message: 'All product quantities must be greater than 0'
+      });
+    }
+
+    // ✅ FIX 3: Validate reasonable quantity limits
+    const maxQuantityPerItem = 100;
+    const excessiveQuantities = items.filter(item => item.quantity > maxQuantityPerItem);
+    if (excessiveQuantities.length > 0) {
+      return res.status(400).json({ 
+        error: 'Quantity limit exceeded',
+        message: `Maximum ${maxQuantityPerItem} items per product`
+      });
+    }
+
+    // Fetch product details
     const products = await fetchProductDetails(productIds);
 
     if (!Array.isArray(products) || products.length !== items.length) {
@@ -143,11 +184,11 @@ app.post('/orders', validateCreateOrder, handleValidationErrors, async (req, res
       }
 
       if (!product.isActive) {
-        throw new Error(`Product ${product.name} is not available`);
+        throw new Error(`Product "${product.name}" is not available`);
       }
 
       if (product.stock < item.quantity) {
-        throw new Error(`Insufficient stock for ${product.name}. Available: ${product.stock}`);
+        throw new Error(`Insufficient stock for "${product.name}". Available: ${product.stock}, Requested: ${item.quantity}`);
       }
 
       const lineTotal = parseFloat(product.price) * item.quantity;
@@ -159,6 +200,16 @@ app.post('/orders', validateCreateOrder, handleValidationErrors, async (req, res
         price: product.price,
         quantity: item.quantity,
         lineTotal: lineTotal.toFixed(2)
+      });
+    }
+
+    // ✅ Validate minimum order amount
+    const minOrderAmount = 5;
+    if (totalPrice < minOrderAmount) {
+      return res.status(400).json({ 
+        error: 'Minimum order amount not met',
+        message: `Minimum order amount is $${minOrderAmount}`,
+        currentTotal: totalPrice.toFixed(2)
       });
     }
 
@@ -207,7 +258,9 @@ app.post('/orders', validateCreateOrder, handleValidationErrors, async (req, res
     endTimer({ status: 'failed' });
     console.error('Create order error:', error);
 
-    if (error.message.includes('not found') || error.message.includes('stock')) {
+    if (error.message.includes('not found') || 
+        error.message.includes('stock') || 
+        error.message.includes('available')) {
       return res.status(400).json({ error: error.message });
     }
 
@@ -257,6 +310,8 @@ app.get('/orders', async (req, res) => {
   }
 });
 
+// ... continued from Part 1
+
 // Get order by ID
 app.get('/orders/:id', async (req, res) => {
   try {
@@ -294,6 +349,7 @@ app.patch('/orders/:id/status', [
 ], handleValidationErrors, async (req, res) => {
   try {
     const userId = getUserId(req);
+    const userRole = req.headers['x-user-role'];
     const { status } = req.body;
 
     const order = await Order.findByPk(req.params.id);
@@ -303,12 +359,8 @@ app.patch('/orders/:id/status', [
     }
 
     // Check authorization
-    if (order.user_id !== parseInt(userId)) {
-      // Allow admin to update any order (check role from header)
-      const userRole = req.headers['x-user-role'];
-      if (userRole !== 'admin') {
-        return res.status(403).json({ error: 'Forbidden' });
-      }
+    if (order.user_id !== parseInt(userId) && userRole !== 'admin') {
+      return res.status(403).json({ error: 'Forbidden' });
     }
 
     // Validate status transitions
@@ -323,7 +375,9 @@ app.patch('/orders/:id/status', [
 
     if (!validTransitions[order.status].includes(status)) {
       return res.status(400).json({ 
-        error: `Cannot transition from ${order.status} to ${status}` 
+        error: `Cannot transition from ${order.status} to ${status}`,
+        currentStatus: order.status,
+        allowedTransitions: validTransitions[order.status]
       });
     }
 
@@ -334,7 +388,12 @@ app.patch('/orders/:id/status', [
       });
 
       for (const item of orderItems) {
-        await updateProductStock(item.productId, item.quantity, 'increment');
+        try {
+          await updateProductStock(item.productId, item.quantity, 'increment');
+        } catch (error) {
+          console.error(`Failed to restore stock for product ${item.productId}:`, error);
+          // Continue with other items even if one fails
+        }
       }
     }
 
@@ -372,7 +431,9 @@ app.delete('/orders/:id', async (req, res) => {
     // Can only cancel if order is pending or confirmed
     if (!['pending', 'confirmed'].includes(order.status)) {
       return res.status(400).json({ 
-        error: 'Cannot cancel order in current status' 
+        error: 'Cannot cancel order in current status',
+        currentStatus: order.status,
+        message: 'Only pending or confirmed orders can be cancelled'
       });
     }
 
@@ -382,14 +443,22 @@ app.delete('/orders/:id', async (req, res) => {
     });
 
     for (const item of orderItems) {
-      await updateProductStock(item.productId, item.quantity, 'increment');
+      try {
+        await updateProductStock(item.productId, item.quantity, 'increment');
+      } catch (error) {
+        console.error(`Failed to restore stock for product ${item.productId}:`, error);
+        // Continue with other items
+      }
     }
 
     await order.update({ status: 'cancelled' });
 
     orderCounter.labels('cancelled').inc();
 
-    res.json({ message: 'Order cancelled successfully' });
+    res.json({ 
+      message: 'Order cancelled successfully',
+      orderId: order.id
+    });
   } catch (error) {
     console.error('Cancel order error:', error);
     res.status(500).json({ error: 'Failed to cancel order' });
@@ -402,25 +471,26 @@ app.get('/health', async (req, res) => {
     await sequelize.authenticate();
     
     // Check product service connectivity
+    let productServiceStatus = 'connected';
     try {
       await axios.get(`${PRODUCT_SERVICE_URL}/health`, { timeout: 3000 });
     } catch (error) {
-      return res.status(503).json({
-        status: 'degraded',
-        database: 'connected',
-        productService: 'unreachable'
-      });
+      productServiceStatus = 'unreachable';
     }
 
-    res.json({ 
-      status: 'ok',
+    const status = productServiceStatus === 'connected' ? 'ok' : 'degraded';
+
+    res.status(status === 'ok' ? 200 : 503).json({
+      status,
+      service: 'order-service',
       database: 'connected',
-      productService: 'connected',
+      productService: productServiceStatus,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
     res.status(500).json({ 
       status: 'error',
+      service: 'order-service',
       database: 'disconnected',
       error: error.message
     });

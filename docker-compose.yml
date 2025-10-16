@@ -6,33 +6,43 @@ services:
     build: ./services/api-gateway
     container_name: api-gateway
     ports:
-      - "8080:8080"
+      - "${API_GATEWAY_PORT:-8080}:8080"
     environment:
       - PORT=8080
-      - NODE_ENV=development
-      - JWT_SECRET=your-secret-key-change-in-production
-      - ALLOWED_ORIGINS=http://localhost:3000
+      - NODE_ENV=${NODE_ENV:-development}
+      - JWT_SECRET=${JWT_SECRET}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000}
       - USER_SERVICE_URL=http://user:3000
       - PRODUCT_SERVICE_URL=http://product:3000
       - ORDER_SERVICE_URL=http://order:3000
       - PAYMENT_SERVICE_URL=http://payment:3000
     depends_on:
-      - user
-      - product
-      - order
-      - payment
+      user:
+        condition: service_healthy
+      product:
+        condition: service_healthy
+      order:
+        condition: service_healthy
+      payment:
+        condition: service_healthy
     networks:
       - fastfood
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8080/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   # ===== USER SERVICE =====
   user-db:
-    image: postgres:15
+    image: postgres:15-alpine
     container_name: user-db
     environment:
       POSTGRES_DB: user_db
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
     ports: 
       - "5433:5432"
     volumes:
@@ -50,31 +60,38 @@ services:
     build: ./services/user
     container_name: user-service
     ports:
-      - "3001:3000"
+      - "${USER_SERVICE_PORT:-3001}:3000"
     environment:
       - PORT=3000
       - DB_HOST=user-db
       - DB_USER=postgres
-      - DB_PASSWORD=password
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-password}
       - DB_NAME=user_db
       - DB_PORT=5432
-      - JWT_SECRET=your-secret-key-change-in-production
-      - JWT_EXPIRES_IN=24h
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRES_IN=${JWT_EXPIRES_IN:-24h}
+      - NODE_ENV=${NODE_ENV:-development}
     depends_on:
       user-db:
         condition: service_healthy
     networks:
       - fastfood
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   # ===== PRODUCT SERVICE =====
   product-db:
-    image: postgres:15
+    image: postgres:15-alpine
     container_name: product-db
     environment:
       POSTGRES_DB: product_db
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
     ports:
       - "5434:5432"
     volumes:
@@ -92,29 +109,36 @@ services:
     build: ./services/product
     container_name: product-service
     ports:
-      - "3002:3000"
+      - "${PRODUCT_SERVICE_PORT:-3002}:3000"
     environment:
       - PORT=3000
       - DB_HOST=product-db
       - DB_USER=postgres
-      - DB_PASSWORD=password
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-password}
       - DB_NAME=product_db
       - DB_PORT=5432
+      - NODE_ENV=${NODE_ENV:-development}
     depends_on:
       product-db:
         condition: service_healthy
     networks:
       - fastfood
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   # ===== ORDER SERVICE =====
   order-db:
-    image: postgres:15
+    image: postgres:15-alpine
     container_name: order-db
     environment:
       POSTGRES_DB: order_db
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
     ports:
       - "5438:5432"
     volumes:
@@ -132,32 +156,39 @@ services:
     build: ./services/order
     container_name: order-service
     ports:
-      - "3003:3000"
+      - "${ORDER_SERVICE_PORT:-3003}:3000"
     environment:
       - PORT=3000
       - DB_HOST=order-db
       - DB_USER=postgres
-      - DB_PASSWORD=password
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-password}
       - DB_NAME=order_db
       - DB_PORT=5432
       - PRODUCT_URL=http://product:3000
+      - NODE_ENV=${NODE_ENV:-development}
     depends_on:
       order-db:
         condition: service_healthy
       product:
-        condition: service_started
+        condition: service_healthy
     networks:
       - fastfood
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   # ===== PAYMENT SERVICE =====
   payment-db:
-    image: postgres:15
+    image: postgres:15-alpine
     container_name: payment-db
     environment:
       POSTGRES_DB: payment_db
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
     ports:
       - "5439:5432"
     volumes:
@@ -175,30 +206,37 @@ services:
     build: ./services/payment
     container_name: payment-service
     ports:
-      - "3004:3000"
+      - "${PAYMENT_SERVICE_PORT:-3004}:3000"
     environment:
       - PORT=3000
       - DB_HOST=payment-db
       - DB_USER=postgres
-      - DB_PASSWORD=password
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-password}
       - DB_NAME=payment_db
       - DB_PORT=5432
       - ORDER_URL=http://order:3000
+      - NODE_ENV=${NODE_ENV:-development}
     depends_on:
       payment-db:
         condition: service_healthy
       order:
-        condition: service_started
+        condition: service_healthy
     networks:
       - fastfood
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   # ===== PROMETHEUS (MONITORING) =====
   prometheus:
     image: prom/prometheus:latest
     container_name: prometheus
     ports:
-      - "9090:9090"
+      - "${PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
       - ./monitoring/alert.rules.yml:/etc/prometheus/alert.rules.yml
@@ -208,6 +246,7 @@ services:
       - '--storage.tsdb.path=/prometheus'
       - '--web.console.libraries=/usr/share/prometheus/console_libraries'
       - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
     depends_on:
       - api-gateway
       - user
@@ -217,6 +256,11 @@ services:
     networks:
       - fastfood
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   # ===== ALERTMANAGER =====
   alertmanager:
@@ -239,11 +283,12 @@ services:
     image: grafana/grafana:latest
     container_name: grafana
     ports:
-      - "3005:3000"
+      - "${GRAFANA_PORT:-3005}:3000"
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
     volumes:
       - grafana_data:/var/lib/grafana
       - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
@@ -278,13 +323,22 @@ services:
 networks:
   fastfood:
     driver: bridge
+    name: fastfood-network
 
 volumes:
   user_db_data:
+    name: fastfood_user_db
   product_db_data:
+    name: fastfood_product_db
   order_db_data:
+    name: fastfood_order_db
   payment_db_data:
+    name: fastfood_payment_db
   prometheus_data:
+    name: fastfood_prometheus
   alertmanager_data:
+    name: fastfood_alertmanager
   grafana_data:
+    name: fastfood_grafana
   pgadmin_data:
+    name: fastfood_pgadmin

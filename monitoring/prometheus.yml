@@ -10,68 +10,62 @@ alerting:
   alertmanagers:
     - static_configs:
         - targets:
-            - 'alertmanager:9093'
+            - alertmanager:9093
 
 # Load rules once and periodically evaluate them
 rule_files:
-  - 'alert.rules.yml'
+  - "alert.rules.yml"
 
 # Scrape configurations
 scrape_configs:
-  # API Gateway
+  # ✅ API Gateway metrics
   - job_name: 'api-gateway'
     static_configs:
       - targets: ['api-gateway:8080']
         labels:
           service: 'api-gateway'
-          tier: 'gateway'
-    metrics_path: '/health'
+    metrics_path: '/metrics'
     scrape_interval: 10s
 
-  # User Service
+  # ✅ User Service metrics
   - job_name: 'user-service'
     static_configs:
       - targets: ['user:3000']
         labels:
-          service: 'user'
-          tier: 'backend'
+          service: 'user-service'
     metrics_path: '/metrics'
     scrape_interval: 10s
 
-  # Product Service
+  # ✅ Product Service metrics
   - job_name: 'product-service'
     static_configs:
       - targets: ['product:3000']
         labels:
-          service: 'product'
-          tier: 'backend'
+          service: 'product-service'
     metrics_path: '/metrics'
     scrape_interval: 10s
 
-  # Order Service
+  # ✅ Order Service metrics
   - job_name: 'order-service'
     static_configs:
       - targets: ['order:3000']
         labels:
-          service: 'order'
-          tier: 'backend'
+          service: 'order-service'
     metrics_path: '/metrics'
     scrape_interval: 10s
 
-  # Payment Service
+  # ✅ Payment Service metrics
   - job_name: 'payment-service'
     static_configs:
       - targets: ['payment:3000']
         labels:
-          service: 'payment'
-          tier: 'backend'
+          service: 'payment-service'
     metrics_path: '/metrics'
     scrape_interval: 10s
 
-  # Prometheus self-monitoring
+  # ✅ Prometheus self-monitoring
   - job_name: 'prometheus'
     static_configs:
       - targets: ['localhost:9090']
         labels:
           service: 'prometheus'
-          tier: 'monitoring'

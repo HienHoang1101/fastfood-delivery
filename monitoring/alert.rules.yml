@@ -1,138 +1,143 @@
 groups:
-  - name: service_availability
+  - name: service_health
     interval: 30s
     rules:
+      # Service Down Alerts
       - alert: ServiceDown
         expr: up == 0
         for: 1m
         labels:
           severity: critical
-          category: availability
         annotations:
           summary: "Service {{ $labels.job }} is down"
           description: "{{ $labels.job }} has been down for more than 1 minute."
 
-      - alert: ServiceDegraded
-        expr: up == 0
-        for: 30s
-        labels:
-          severity: warning
-          category: availability
-        annotations:
-          summary: "Service {{ $labels.job }} may be degraded"
-          description: "{{ $labels.job }} has been unreachable for 30 seconds."
-
-  - name: request_rates
-    interval: 30s
-    rules:
-      - alert: HighRequestRate
-        expr: rate(http_requests_total[5m]) > 100
-        for: 2m
-        labels:
-          severity: warning
-          category: performance
-        annotations:
-          summary: "High request rate on {{ $labels.job }}"
-          description: "{{ $labels.job }} is receiving {{ $value }} requests/sec (threshold: 100)"
-
+      # High Error Rate
       - alert: HighErrorRate
         expr: |
           (
-            sum(rate(http_requests_total{status=~"5.."}[5m])) by (job)
+            sum(rate(user_requests_total{status=~"5.."}[5m])) by (service)
             /
-            sum(rate(http_requests_total[5m])) by (job)
+            sum(rate(user_requests_total[5m])) by (service)
           ) > 0.05
         for: 5m
         labels:
-          severity: critical
-          category: errors
+          severity: warning
         annotations:
-          summary: "High error rate on {{ $labels.job }}"
-          description: "{{ $labels.job }} error rate is {{ $value | humanizePercentage }} (threshold: 5%)"
+          summary: "High error rate on {{ $labels.service }}"
+          description: "Error rate is above 5% for {{ $labels.service }}"
 
-  - name: business_metrics
-    interval: 1m
+  - name: database_alerts
+    interval: 30s
     rules:
+      # Database Connection Issues
+      - alert: DatabaseConnectionFailed
+        expr: |
+          up{job=~".*-service"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database connection failed for {{ $labels.job }}"
+          description: "{{ $labels.job }} cannot connect to database"
+
+  - name: order_alerts
+    interval: 30s
+    rules:
+      # High Order Failure Rate
       - alert: HighOrderFailureRate
         expr: |
           (
-            rate(orders_total{status="failed"}[10m])
+            rate(orders_total{status="failed"}[5m])
             /
-            rate(orders_total[10m])
+            rate(orders_total[5m])
           ) > 0.1
         for: 5m
         labels:
           severity: warning
-          category: business
         annotations:
           summary: "High order failure rate"
-          description: "Order failure rate is {{ $value | humanizePercentage }} over the last 10 minutes"
+          description: "More than 10% of orders are failing"
 
+      # Low Order Volume (potential issue)
+      - alert: LowOrderVolume
+        expr: |
+          rate(orders_total[5m]) < 0.01
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "Low order volume detected"
+          description: "Order rate is unusually low"
+
+  - name: payment_alerts
+    interval: 30s
+    rules:
+      # High Payment Failure Rate
       - alert: HighPaymentFailureRate
         expr: |
           (
-            rate(payments_total{status="failed"}[10m])
+            rate(payments_total{status="failed"}[5m])
             /
-            rate(payments_total[10m])
-          ) > 0.15
+            rate(payments_total[5m])
+          ) > 0.2
         for: 5m
         labels:
           severity: critical
-          category: business
         annotations:
           summary: "High payment failure rate"
-          description: "Payment failure rate is {{ $value | humanizePercentage }} (threshold: 15%)"
+          description: "More than 20% of payments are failing"
 
-      - alert: LowProductStock
-        expr: product_stock_level < 10
-        for: 5m
-        labels:
-          severity: warning
-          category: inventory
-        annotations:
-          summary: "Low stock for product {{ $labels.product_name }}"
-          description: "Product {{ $labels.product_name }} has only {{ $value }} items in stock"
-
-  - name: performance
+  - name: performance_alerts
     interval: 30s
     rules:
-      - alert: HighResponseTime
+      # Slow API Response Time
+      - alert: SlowAPIResponse
         expr: |
           histogram_quantile(0.95, 
-            rate(http_request_duration_seconds_bucket[5m])
-          ) > 2
+            rate(order_processing_duration_seconds_bucket[5m])
+          ) > 5
         for: 5m
         labels:
           severity: warning
-          category: performance
         annotations:
-          summary: "High response time on {{ $labels.job }}"
-          description: "95th percentile response time is {{ $value }}s (threshold: 2s)"
+          summary: "Slow API response time"
+          description: "95th percentile response time is above 5 seconds"
 
+      # High Memory Usage
       - alert: HighMemoryUsage
         expr: |
           (
             process_resident_memory_bytes
             /
-            1024 / 1024
-          ) > 512
+            1024 / 1024 / 1024
+          ) > 1
         for: 5m
         labels:
           severity: warning
-          category: resources
         annotations:
           summary: "High memory usage on {{ $labels.job }}"
-          description: "{{ $labels.job }} is using {{ $value }}MB of memory (threshold: 512MB)"
+          description: "Memory usage is above 1GB"
 
-  - name: database
-    interval: 1m
+  - name: stock_alerts
+    interval: 30s
     rules:
-      - alert: DatabaseConnectionIssue
-        expr: pg_up == 0
+      # Low Product Stock
+      - alert: LowProductStock
+        expr: product_stock_level < 5
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low stock for product {{ $labels.product_name }}"
+          description: "Product {{ $labels.product_name }} (ID: {{ $labels.product_id }}) has only {{ $value }} items left"
+
+      # Out of Stock
+      - alert: ProductOutOfStock
+        expr: product_stock_level == 0
         for: 1m
         labels:
           severity: critical
-          category: database
         annotations:
-          summary: "Database connection issue for {{ $labels.job }}"
-          description: "Cannot connect to database for {{ $labels.job }}"
+          summary: "Product {{ $labels.product_name }} is out of stock"
+          description: "Product {{ $labels.product_name }} (ID: {{ $labels.product_id }}) is out of stock"

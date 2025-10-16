@@ -10,6 +10,21 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 8080;
 
+// ===== ENVIRONMENT VALIDATION =====
+const requiredEnvVars = ['JWT_SECRET'];
+const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+
+if (missingEnvVars.length > 0) {
+  console.error('❌ Missing required environment variables:', missingEnvVars);
+  process.exit(1);
+}
+
+if (process.env.NODE_ENV === 'production' && 
+    process.env.JWT_SECRET === 'your-secret-key-change-in-production') {
+  console.error('❌ SECURITY: Change JWT_SECRET in production!');
+  process.exit(1);
+}
+
 // ===== MIDDLEWARE =====
 
 // Security headers
@@ -31,22 +46,36 @@ app.use(morgan('combined'));
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
+  max: 100,
   message: 'Too many requests from this IP, please try again later.'
 });
 app.use(limiter);
 
-// ===== JWT AUTHENTICATION MIDDLEWARE =====
+// ===== JWT AUTHENTICATION MIDDLEWARE (FIXED) =====
+
+// ✅ Define public routes with specific HTTP methods
+const PUBLIC_ROUTES = [
+  { path: '/api/users/login', methods: ['POST'] },
+  { path: '/api/users/register', methods: ['POST'] },
+  { path: '/api/products/products', methods: ['GET'] },
+  { path: '/api/products/categories', methods: ['GET'] },
+  { path: '/health', methods: ['GET'] },
+  { path: '/metrics', methods: ['GET'] }
+];
+
+const isPublicRoute = (path, method) => {
+  return PUBLIC_ROUTES.some(route => 
+    path.startsWith(route.path) && route.methods.includes(method)
+  );
+};
 
 const authenticateToken = (req, res, next) => {
-  // Bypass authentication for public routes
-  const publicRoutes = ['/api/users/login', '/api/users/register', '/api/products', '/health'];
-  const isPublicRoute = publicRoutes.some(route => req.path.startsWith(route));
-  
-  if (isPublicRoute && req.method === 'GET') {
+  // Check if route is public
+  if (isPublicRoute(req.path, req.method)) {
     return next();
   }
 
+  // Require authentication for all other routes
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
@@ -54,7 +83,7 @@ const authenticateToken = (req, res, next) => {
     return res.status(401).json({ error: 'Access token required' });
   }
 
-  jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key-change-in-production', (err, user) => {
+  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
     if (err) {
       return res.status(403).json({ error: 'Invalid or expired token' });
     }
@@ -63,9 +92,8 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
-// Apply authentication to protected routes
-app.use('/api/orders', authenticateToken);
-app.use('/api/payments', authenticateToken);
+// ✅ Apply authentication globally
+app.use(authenticateToken);
 
 // ===== PROXY CONFIGURATION =====
 
@@ -73,18 +101,17 @@ const proxyOptions = (target) => ({
   target,
   changeOrigin: true,
   pathRewrite: (path, req) => {
-    // Remove /api prefix for internal services
     return path.replace(/^\/api\/[^/]+/, '');
   },
   onProxyReq: (proxyReq, req) => {
-    // Forward user info to services
     if (req.user) {
       proxyReq.setHeader('X-User-Id', req.user.id);
       proxyReq.setHeader('X-User-Email', req.user.email);
+      proxyReq.setHeader('X-User-Role', req.user.role || 'customer');
     }
   },
   onError: (err, req, res) => {
-    console.error('Proxy Error:', err);
+    console.error('Proxy Error:', err.message);
     res.status(503).json({ 
       error: 'Service temporarily unavailable',
       message: err.message 
@@ -117,7 +144,8 @@ app.use('/api/payments', createProxyMiddleware(
 // ===== HEALTH CHECK =====
 app.get('/health', (req, res) => {
   res.json({ 
-    status: 'ok', 
+    status: 'ok',
+    service: 'api-gateway',
     timestamp: new Date().toISOString(),
     uptime: process.uptime()
   });
@@ -141,6 +169,7 @@ app.use('*', (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 API Gateway running on port ${PORT}`);
   console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`✅ JWT Authentication enabled`);
 });
 
 module.exports = app;
