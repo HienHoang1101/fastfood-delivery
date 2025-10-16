@@ -1,78 +1,97 @@
 #!/bin/bash
 
-echo "🌱 Seeding initial data..."
+# Dừng ngay lập tức nếu có lỗi
+set -e
 
+# URL của API Gateway
 API_URL="http://localhost:8080/api"
 
-# Register admin user
+echo "🌱 Seeding initial data..."
+
+# --- 1. Tạo người dùng ---
+
 echo "Creating admin user..."
-ADMIN_RESPONSE=$(curl -s -X POST "$API_URL/users/register" \
-  -H "Content-Type: application/json" \
+ADMIN_RESPONSE=$(curl -s -w "%{http_code}" -X POST -H "Content-Type: application/json" \
   -d '{
-    "name": "Admin User",
+    "fullName": "Admin User",
     "email": "admin@fastfood.com",
     "password": "admin123",
-    "phone": "0123456789"
-  }')
+    "address": "123 Admin St",
+    "phone": "111222333",
+    "role": "admin"
+  }' \
+  ${API_URL}/auth/register)
+echo "Admin creation response: $ADMIN_RESPONSE"
 
-echo "Admin created: $ADMIN_RESPONSE"
 
-# Register test user
 echo "Creating test user..."
-USER_RESPONSE=$(curl -s -X POST "$API_URL/users/register" \
-  -H "Content-Type: application/json" \
+USER_RESPONSE=$(curl -s -w "%{http_code}" -X POST -H "Content-Type: application/json" \
   -d '{
-    "name": "Test User",
+    "fullName": "Test User",
     "email": "user@test.com",
     "password": "user123",
-    "phone": "0987654321"
-  }')
+    "address": "456 User Ave",
+    "phone": "444555666"
+  }' \
+  ${API_URL}/auth/register)
+echo "User creation response: $USER_RESPONSE"
 
-echo "Test user created: $USER_RESPONSE"
 
-# Get admin token
-ADMIN_TOKEN=$(echo $ADMIN_RESPONSE | grep -o '"token":"[^"]*' | cut -d'"' -f4)
+# --- 2. Chờ service ổn định ---
+
+echo "⏳ Waiting 5 seconds for services to process..."
+sleep 5
+
+
+# --- 3. Đăng nhập để lấy Token ---
+
+echo "Logging in as admin to get token..."
+LOGIN_RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" \
+    -d '{"email": "admin@fastfood.com", "password": "admin123"}' \
+    ${API_URL}/auth/login)
+
+# Cố gắng trích xuất token. jq là một công cụ dòng lệnh để xử lý JSON.
+# Lỗi 'jq: command not found' có thể xảy ra nếu chưa cài, nhưng chúng ta sẽ xử lý.
+ADMIN_TOKEN=$(echo $LOGIN_RESPONSE | grep -o '"token":"[^"]*' | cut -d'"' -f4)
+
 
 if [ -z "$ADMIN_TOKEN" ]; then
-    echo "❌ Failed to get admin token. Trying to login..."
-    LOGIN_RESPONSE=$(curl -s -X POST "$API_URL/users/login" \
-      -H "Content-Type: application/json" \
-      -d '{
-        "email": "admin@fastfood.com",
-        "password": "admin123"
-      }')
-    ADMIN_TOKEN=$(echo $LOGIN_RESPONSE | grep -o '"token":"[^"]*' | cut -d'"' -f4)
+    echo "❌ Failed to get admin token from login response."
+    echo "Login Response Body: $LOGIN_RESPONSE"
+    echo "Please check if the user service is running and if the credentials are correct."
+    exit 1
 fi
 
-echo "Admin token: $ADMIN_TOKEN"
+echo "✅ Admin token obtained successfully."
 
-# Create products
+
+# --- 4. Tạo sản phẩm ---
+
 echo "Creating products..."
 
-products=(
-  '{"name":"Burger Classic","description":"Delicious beef burger","price":5.99,"category":"Burgers","stock":50,"image_url":"https://example.com/burger.jpg"}'
-  '{"name":"Cheeseburger","description":"Burger with cheese","price":6.99,"category":"Burgers","stock":45,"image_url":"https://example.com/cheeseburger.jpg"}'
-  '{"name":"Chicken Burger","description":"Crispy chicken burger","price":6.49,"category":"Burgers","stock":40,"image_url":"https://example.com/chicken-burger.jpg"}'
-  '{"name":"French Fries","description":"Crispy golden fries","price":2.99,"category":"Sides","stock":100,"image_url":"https://example.com/fries.jpg"}'
-  '{"name":"Onion Rings","description":"Crispy onion rings","price":3.49,"category":"Sides","stock":80,"image_url":"https://example.com/onion-rings.jpg"}'
-  '{"name":"Coca Cola","description":"500ml bottle","price":1.99,"category":"Drinks","stock":200,"image_url":"https://example.com/coke.jpg"}'
-  '{"name":"Sprite","description":"500ml bottle","price":1.99,"category":"Drinks","stock":180,"image_url":"https://example.com/sprite.jpg"}'
-  '{"name":"Ice Cream","description":"Vanilla ice cream","price":3.99,"category":"Desserts","stock":60,"image_url":"https://example.com/ice-cream.jpg"}'
-  '{"name":"Apple Pie","description":"Warm apple pie","price":2.99,"category":"Desserts","stock":50,"image_url":"https://example.com/apple-pie.jpg"}'
-  '{"name":"Pizza Margherita","description":"Classic Italian pizza","price":9.99,"category":"Pizza","stock":30,"image_url":"https://example.com/pizza.jpg"}'
+PRODUCTS=(
+  '{"name":"Cheeseburger","description":"Classic beef burger with cheese, lettuce, and tomato","price":5.99,"category":"Burgers","stock":100,"imageUrl":"/images/cheeseburger.jpg"}'
+  '{"name":"Bacon Burger","description":"Juicy beef patty with crispy bacon and BBQ sauce","price":7.49,"category":"Burgers","stock":80,"imageUrl":"/images/bacon-burger.jpg"}'
+  '{"name":"Veggie Burger","description":"A delicious plant-based patty with fresh vegetables","price":6.99,"category":"Burgers","stock":50,"imageUrl":"/images/veggie-burger.jpg"}'
+  '{"name":"French Fries","description":"Golden crispy french fries","price":2.99,"category":"Sides","stock":200,"imageUrl":"/images/fries.jpg"}'
+  '{"name":"Onion Rings","description":"Battered and fried onion rings","price":3.49,"category":"Sides","stock":150,"imageUrl":"/images/onion-rings.jpg"}'
+  '{"name":"Coca-Cola","description":"Classic Coca-Cola","price":1.99,"category":"Drinks","stock":300,"imageUrl":"/images/coke.jpg"}'
+  '{"name":"Sprite","description":"Lemon-lime flavored soft drink","price":1.99,"category":"Drinks","stock":300,"imageUrl":"/images/sprite.jpg"}'
+  '{"name":"Chicken Nuggets","description":"Crispy chicken nuggets served with your choice of sauce","price":4.99,"category":"Sides","stock":120,"imageUrl":"/images/nuggets.jpg"}'
+  '{"name":"Milkshake","description":"Thick and creamy vanilla milkshake","price":3.99,"category":"Drinks","stock":100,"imageUrl":"/images/milkshake.jpg"}'
+  '{"name":"Spicy Chicken Sandwich","description":"A fiery chicken sandwich for those who like it hot","price":6.49,"category":"Burgers","stock":70,"imageUrl":"/images/spicy-chicken.jpg"}'
 )
 
-for product in "${products[@]}"; do
-    curl -s -X POST "$API_URL/products/products" \
-      -H "Content-Type: application/json" \
-      -H "Authorization: Bearer $ADMIN_TOKEN" \
-      -H "X-User-Role: admin" \
-      -d "$product"
-    echo ""
+for product_data in "${PRODUCTS[@]}"; do
+  curl -s -X POST -H "Content-Type: application/json" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    -d "${product_data}" \
+    "${API_URL}/products"
+  echo "" # Newline for cleaner output
 done
 
 echo "✅ Data seeding completed!"
 echo ""
 echo "Test accounts:"
 echo "Admin: admin@fastfood.com / admin123"
-echo "User: user@test.com / user123"
+echo "User:  user@test.com / user123"

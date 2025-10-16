@@ -1,0 +1,44 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "User Database",
+      "Group": "Fastfood Delivery",
+      "Host": "user-db",
+      "Port": 5432,
+      "MaintenanceDB": "user_db",
+      "Username": "postgres",
+      "SSLMode": "prefer",
+      "Comment": "User service database"
+    },
+    "2": {
+      "Name": "Product Database",
+      "Group": "Fastfood Delivery",
+      "Host": "product-db",
+      "Port": 5432,
+      "MaintenanceDB": "product_db",
+      "Username": "postgres",
+      "SSLMode": "prefer",
+      "Comment": "Product service database"
+    },
+    "3": {
+      "Name": "Order Database",
+      "Group": "Fastfood Delivery",
+      "Host": "order-db",
+      "Port": 5432,
+      "MaintenanceDB": "order_db",
+      "Username": "postgres",
+      "SSLMode": "prefer",
+      "Comment": "Order service database"
+    },
+    "4": {
+      "Name": "Payment Database",
+      "Group": "Fastfood Delivery",
+      "Host": "payment-db",
+      "Port": 5432,
+      "MaintenanceDB": "payment_db",
+      "Username": "postgres",
+      "SSLMode": "prefer",
+      "Comment": "Payment service database"
+    }
+  }
+}
