@@ -5,13 +5,11 @@ const Product = require('./models/Product');
 const sequelize = require('./db');
 const client = require('prom-client');
 require('dotenv').config();
-const productRoutes = require('./routes/products');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
-
-app.use('/products', productRoutes);
 
 // ===== PROMETHEUS METRICS =====
 client.collectDefaultMetrics();
