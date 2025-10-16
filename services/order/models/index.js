@@ -1,4 +1,3 @@
-// models/index.js - Setup relationships
 const Order = require('./Order');
 const OrderItem = require('./OrderItem');
 

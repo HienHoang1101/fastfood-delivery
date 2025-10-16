@@ -20,19 +20,14 @@ const logger = winston.createLogger({
     winston.format.json()
   ),
   transports: [
-    new winston.transports.File({ filename: 'error.log', level: 'error' }),
-    new winston.transports.File({ filename: 'combined.log' }),
+    new winston.transports.Console({
+      format: winston.format.combine(
+        winston.format.colorize(),
+        winston.format.simple()
+      )
+    })
   ],
 });
-
-if (process.env.NODE_ENV !== 'production') {
-  logger.add(new winston.transports.Console({
-    format: winston.format.combine(
-      winston.format.colorize(),
-      winston.format.simple()
-    )
-  }));
-}
 
 // ===== ENVIRONMENT VALIDATION =====
 const requiredEnvVars = ['JWT_SECRET'];
@@ -43,25 +38,16 @@ if (missingEnvVars.length > 0) {
   process.exit(1);
 }
 
-if (process.env.NODE_ENV === 'production' && 
-    process.env.JWT_SECRET === 'your-secret-key-change-in-production') {
-  logger.error('SECURITY: Change JWT_SECRET in production!');
-  process.exit(1);
-}
-
 if (process.env.JWT_SECRET.length < 32) {
   logger.error('JWT_SECRET must be at least 32 characters long');
   process.exit(1);
 }
 
 // ===== MIDDLEWARE =====
-
-// Security headers
 app.use(helmet({
   contentSecurityPolicy: process.env.NODE_ENV === 'production' ? undefined : false
 }));
 
-// ✅ FIXED CORS configuration
 app.use(cors({
   origin: function (origin, callback) {
     const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
@@ -69,7 +55,6 @@ app.use(cors({
       'http://localhost:3005'
     ];
     
-    // Allow requests with no origin (mobile apps, curl, Postman)
     if (!origin) return callback(null, true);
     
     if (allowedOrigins.indexOf(origin) !== -1) {
@@ -83,61 +68,54 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-User-Id', 'X-User-Role', 'X-User-Email'],
   exposedHeaders: ['X-Request-Id'],
-  maxAge: 86400 // 24 hours
+  maxAge: 86400
 }));
 
-// Body parsing
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Request ID for tracking
+// Request ID
 app.use((req, res, next) => {
   req.id = require('crypto').randomBytes(16).toString('hex');
   res.setHeader('X-Request-Id', req.id);
   next();
 });
 
-// Logging with request ID
 app.use(morgan('combined', {
-  stream: {
-    write: (message) => logger.info(message.trim())
-  }
+  stream: { write: (message) => logger.info(message.trim()) }
 }));
 
-// ✅ ENHANCED Rate limiting
+// Rate limiting
 const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 100,
-  message: { error: 'Too many requests from this IP, please try again later.' },
+  message: { error: 'Too many requests, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
-  handler: (req, res) => {
-    logger.warn('Rate limit exceeded', { 
-      ip: req.ip, 
-      path: req.path,
-      requestId: req.id 
-    });
-    res.status(429).json({ 
-      error: 'Too many requests from this IP, please try again later.' 
-    });
-  }
 });
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
-  message: { error: 'Too many authentication attempts, please try again later.' },
   skipSuccessfulRequests: true,
   standardHeaders: true,
   legacyHeaders: false,
 });
 
 app.use(generalLimiter);
-app.use('/api/users/login', authLimiter);
-app.use('/api/users/register', authLimiter);
+
+// ===== HEALTH CHECK (BEFORE AUTH) =====
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok',
+    service: 'api-gateway',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    environment: process.env.NODE_ENV || 'development'
+  });
+});
 
 // ===== JWT AUTHENTICATION MIDDLEWARE =====
-
 const PUBLIC_ROUTES = [
   { path: '/api/users/login', methods: ['POST'] },
   { path: '/api/users/register', methods: ['POST'] },
@@ -162,41 +140,31 @@ const authenticateToken = (req, res, next) => {
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
-    logger.warn('Missing token', { 
-      path: req.path, 
-      ip: req.ip,
-      requestId: req.id 
-    });
+    logger.warn('Missing token', { path: req.path, ip: req.ip });
     return res.status(401).json({ error: 'Access token required' });
   }
 
   jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
     if (err) {
-      logger.warn('Invalid token', { 
-        error: err.message, 
-        path: req.path,
-        requestId: req.id 
-      });
+      logger.warn('Invalid token', { error: err.message, path: req.path });
       return res.status(403).json({ error: 'Invalid or expired token' });
     }
     req.user = user;
-    logger.info('User authenticated', { 
-      userId: user.id, 
-      path: req.path,
-      requestId: req.id 
-    });
     next();
   });
 };
 
 app.use(authenticateToken);
 
-// ===== PROXY CONFIGURATION =====
+// Apply auth rate limiting AFTER authentication check
+app.use('/api/users/login', authLimiter);
+app.use('/api/users/register', authLimiter);
 
+// ===== PROXY CONFIGURATION =====
 const proxyOptions = (target, serviceName) => ({
   target,
   changeOrigin: true,
-  pathRewrite: (path, req) => {
+  pathRewrite: (path) => {
     return path.replace(/^\/api\/[^/]+/, '');
   },
   onProxyReq: (proxyReq, req) => {
@@ -215,7 +183,7 @@ const proxyOptions = (target, serviceName) => ({
       requestId: req.id
     });
   },
-  onProxyRes: (proxyRes, req, res) => {
+  onProxyRes: (proxyRes, req) => {
     logger.info('Proxy response', {
       service: serviceName,
       statusCode: proxyRes.statusCode,
@@ -235,12 +203,11 @@ const proxyOptions = (target, serviceName) => ({
       requestId: req.id
     });
   },
-  timeout: 30000, // 30 seconds
+  timeout: 30000,
   proxyTimeout: 30000
 });
 
 // ===== ROUTE PROXIES =====
-
 app.use('/api/users', createProxyMiddleware(
   proxyOptions(process.env.USER_SERVICE_URL || 'http://user:3000', 'user-service')
 ));
@@ -256,17 +223,6 @@ app.use('/api/orders', createProxyMiddleware(
 app.use('/api/payments', createProxyMiddleware(
   proxyOptions(process.env.PAYMENT_SERVICE_URL || 'http://payment:3000', 'payment-service')
 ));
-
-// ===== HEALTH CHECK =====
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'ok',
-    service: 'api-gateway',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    environment: process.env.NODE_ENV || 'development'
-  });
-});
 
 // ===== ERROR HANDLING =====
 app.use((err, req, res, next) => {

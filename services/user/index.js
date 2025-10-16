@@ -34,7 +34,6 @@ const loginCounter = new client.Counter({
   labelNames: ['status']
 });
 
-// Middleware đo metrics
 app.use((req, res, next) => {
   const end = () => {
     requestCounter.labels(req.method, req.route?.path || req.path, res.statusCode).inc();
@@ -62,7 +61,6 @@ const validateUpdate = [
   body('address').optional().trim()
 ];
 
-// ===== HELPER FUNCTIONS =====
 const handleValidationErrors = (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -79,23 +77,48 @@ const generateToken = (user) => {
   );
 };
 
-// ===== AUTHENTICATION ROUTES =====
+// ===== HEALTH CHECK (FIRST) =====
+app.get('/health', async (req, res) => {
+  try {
+    await sequelize.authenticate();
+    res.json({ 
+      status: 'ok',
+      service: 'user-service',
+      database: 'connected',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      status: 'error',
+      service: 'user-service',
+      database: 'disconnected',
+      error: error.message
+    });
+  }
+});
 
-// Register new user
+// ===== METRICS ENDPOINT =====
+app.get('/metrics', async (req, res) => {
+  try {
+    res.set('Content-Type', client.register.contentType);
+    res.end(await client.register.metrics());
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to collect metrics' });
+  }
+});
+
+// ===== AUTHENTICATION ROUTES =====
 app.post('/register', validateRegistration, handleValidationErrors, async (req, res) => {
   try {
     const { name, email, password, phone, address } = req.body;
 
-    // Check if user already exists
     const existingUser = await User.findOne({ where: { email } });
     if (existingUser) {
       return res.status(409).json({ error: 'Email already registered' });
     }
 
-    // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create user
     const user = await User.create({
       name,
       email,
@@ -104,9 +127,7 @@ app.post('/register', validateRegistration, handleValidationErrors, async (req, 
       address
     });
 
-    // Generate token
     const token = generateToken(user);
-
     registrationCounter.inc();
 
     res.status(201).json({
@@ -120,36 +141,28 @@ app.post('/register', validateRegistration, handleValidationErrors, async (req, 
   }
 });
 
-// Login
 app.post('/login', validateLogin, handleValidationErrors, async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // Find user
     const user = await User.findOne({ where: { email } });
     if (!user) {
       loginCounter.labels('failed').inc();
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Check if user is active
     if (!user.isActive) {
       return res.status(403).json({ error: 'Account is deactivated' });
     }
 
-    // Verify password
     const isValidPassword = await bcrypt.compare(password, user.password);
     if (!isValidPassword) {
       loginCounter.labels('failed').inc();
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Update last login
     await user.update({ lastLogin: new Date() });
-
-    // Generate token
     const token = generateToken(user);
-
     loginCounter.labels('success').inc();
 
     res.json({
@@ -164,8 +177,6 @@ app.post('/login', validateLogin, handleValidationErrors, async (req, res) => {
 });
 
 // ===== USER MANAGEMENT ROUTES =====
-
-// Get current user profile
 app.get('/profile', async (req, res) => {
   try {
     const userId = req.headers['x-user-id'];
@@ -185,7 +196,6 @@ app.get('/profile', async (req, res) => {
   }
 });
 
-// Update user profile
 app.put('/profile', validateUpdate, handleValidationErrors, async (req, res) => {
   try {
     const userId = req.headers['x-user-id'];
@@ -211,7 +221,6 @@ app.put('/profile', validateUpdate, handleValidationErrors, async (req, res) => 
   }
 });
 
-// Change password
 app.put('/change-password', [
   body('currentPassword').notEmpty(),
   body('newPassword').isLength({ min: 6 })
@@ -229,13 +238,11 @@ app.put('/change-password', [
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Verify current password
     const isValidPassword = await bcrypt.compare(currentPassword, user.password);
     if (!isValidPassword) {
       return res.status(401).json({ error: 'Current password is incorrect' });
     }
 
-    // Hash and update new password
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     await user.update({ password: hashedPassword });
 
@@ -246,35 +253,8 @@ app.put('/change-password', [
   }
 });
 
-// Get user by ID (admin or self)
-app.get('/:id', async (req, res) => {
-  try {
-    const requesterId = req.headers['x-user-id'];
-    const targetId = req.params.id;
-
-    // Users can only view their own profile unless they're admin
-    if (requesterId !== targetId) {
-      // Check if requester is admin (you'd need to implement role checking)
-      const requester = await User.findByPk(requesterId);
-      if (!requester || requester.role !== 'admin') {
-        return res.status(403).json({ error: 'Forbidden' });
-      }
-    }
-
-    const user = await User.findByPk(targetId);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    res.json(user.toJSON());
-  } catch (error) {
-    console.error('Get user error:', error);
-    res.status(500).json({ error: 'Failed to fetch user' });
-  }
-});
-
-// List all users (admin only)
-app.get('/', async (req, res) => {
+// List all users (admin only) - MUST BE BEFORE /:id route
+app.get('/users', async (req, res) => {
   try {
     const requesterId = req.headers['x-user-id'];
     const requester = await User.findByPk(requesterId);
@@ -307,31 +287,28 @@ app.get('/', async (req, res) => {
   }
 });
 
-// ===== HEALTH CHECK =====
-app.get('/health', async (req, res) => {
+// Get user by ID - MUST BE AFTER /users route
+app.get('/users/:id', async (req, res) => {
   try {
-    await sequelize.authenticate();
-    res.json({ 
-      status: 'ok',
-      database: 'connected',
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      status: 'error',
-      database: 'disconnected',
-      error: error.message
-    });
-  }
-});
+    const requesterId = req.headers['x-user-id'];
+    const targetId = req.params.id;
 
-// ===== METRICS ENDPOINT =====
-app.get('/metrics', async (req, res) => {
-  try {
-    res.set('Content-Type', client.register.contentType);
-    res.end(await client.register.metrics());
+    if (requesterId !== targetId) {
+      const requester = await User.findByPk(requesterId);
+      if (!requester || requester.role !== 'admin') {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+    }
+
+    const user = await User.findByPk(targetId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json(user.toJSON());
   } catch (error) {
-    res.status(500).json({ error: 'Failed to collect metrics' });
+    console.error('Get user error:', error);
+    res.status(500).json({ error: 'Failed to fetch user' });
   }
 });
 

@@ -2,8 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const axiosRetry = require('axios-retry');
 const { body, validationResult } = require('express-validator');
-const Order = require('./models/Order');
-const OrderItem = require('./models/OrderItem');
+const { Order, OrderItem } = require('./models');
 const sequelize = require('./db');
 const client = require('prom-client');
 require('dotenv').config();
@@ -70,7 +69,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// ===== VALIDATION MIDDLEWARE (ENHANCED) =====
+// ===== VALIDATION MIDDLEWARE =====
 const validateCreateOrder = [
   body('items').isArray({ min: 1 }).withMessage('Items must be a non-empty array'),
   body('items.*.productId').isInt({ min: 1 }).withMessage('Product ID must be a positive integer'),
@@ -120,9 +119,48 @@ const updateProductStock = async (productId, quantity, operation = 'decrement') 
   }
 };
 
-// ===== ORDER ROUTES =====
+// ===== HEALTH CHECK =====
+app.get('/health', async (req, res) => {
+  try {
+    await sequelize.authenticate();
+    
+    let productServiceStatus = 'connected';
+    try {
+      await axios.get(`${PRODUCT_SERVICE_URL}/health`, { timeout: 3000 });
+    } catch (error) {
+      productServiceStatus = 'unreachable';
+    }
 
-// ✅ Create new order (FIXED)
+    const status = productServiceStatus === 'connected' ? 'ok' : 'degraded';
+
+    res.status(status === 'ok' ? 200 : 503).json({
+      status,
+      service: 'order-service',
+      database: 'connected',
+      productService: productServiceStatus,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      status: 'error',
+      service: 'order-service',
+      database: 'disconnected',
+      error: error.message
+    });
+  }
+});
+
+// ===== METRICS ENDPOINT =====
+app.get('/metrics', async (req, res) => {
+  try {
+    res.set('Content-Type', client.register.contentType);
+    res.end(await client.register.metrics());
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to collect metrics' });
+  }
+});
+
+// ===== ORDER ROUTES =====
 app.post('/orders', validateCreateOrder, handleValidationErrors, async (req, res) => {
   const endTimer = orderProcessingDuration.startTimer();
   const transaction = await sequelize.transaction();
@@ -135,7 +173,7 @@ app.post('/orders', validateCreateOrder, handleValidationErrors, async (req, res
 
     const { items, deliveryAddress, notes } = req.body;
 
-    // ✅ FIX 1: Check for duplicate product IDs
+    // Check for duplicate product IDs
     const productIds = items.map(item => item.productId);
     const uniqueProductIds = new Set(productIds);
     
@@ -146,7 +184,7 @@ app.post('/orders', validateCreateOrder, handleValidationErrors, async (req, res
       });
     }
 
-    // ✅ FIX 2: Validate all quantities are positive
+    // Validate all quantities are positive
     const invalidQuantities = items.filter(item => item.quantity <= 0);
     if (invalidQuantities.length > 0) {
       return res.status(400).json({ 
@@ -155,7 +193,7 @@ app.post('/orders', validateCreateOrder, handleValidationErrors, async (req, res
       });
     }
 
-    // ✅ FIX 3: Validate reasonable quantity limits
+    // Validate reasonable quantity limits
     const maxQuantityPerItem = 100;
     const excessiveQuantities = items.filter(item => item.quantity > maxQuantityPerItem);
     if (excessiveQuantities.length > 0) {
@@ -203,12 +241,12 @@ app.post('/orders', validateCreateOrder, handleValidationErrors, async (req, res
       });
     }
 
-    // ✅ Validate minimum order amount
+    // Validate minimum order amount
     const minOrderAmount = 5;
     if (totalPrice < minOrderAmount) {
       return res.status(400).json({ 
         error: 'Minimum order amount not met',
-        message: `Minimum order amount is $${minOrderAmount}`,
+        message: `Minimum order amount is ${minOrderAmount}`,
         currentTotal: totalPrice.toFixed(2)
       });
     }
@@ -237,7 +275,6 @@ app.post('/orders', validateCreateOrder, handleValidationErrors, async (req, res
 
     await transaction.commit();
 
-    // Update metrics
     orderCounter.labels('pending').inc();
     orderValueHistogram.observe(parseFloat(totalPrice));
     endTimer({ status: 'success' });
@@ -268,7 +305,6 @@ app.post('/orders', validateCreateOrder, handleValidationErrors, async (req, res
   }
 });
 
-// Get all orders for user
 app.get('/orders', async (req, res) => {
   try {
     const userId = getUserId(req);
@@ -310,9 +346,6 @@ app.get('/orders', async (req, res) => {
   }
 });
 
-// ... continued from Part 1
-
-// Get order by ID
 app.get('/orders/:id', async (req, res) => {
   try {
     const userId = getUserId(req);
@@ -342,7 +375,6 @@ app.get('/orders/:id', async (req, res) => {
   }
 });
 
-// Update order status
 app.patch('/orders/:id/status', [
   body('status').isIn(['pending', 'confirmed', 'preparing', 'delivering', 'delivered', 'cancelled'])
     .withMessage('Invalid status')
@@ -358,12 +390,10 @@ app.patch('/orders/:id/status', [
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    // Check authorization
     if (order.user_id !== parseInt(userId) && userRole !== 'admin') {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    // Validate status transitions
     const validTransitions = {
       'pending': ['confirmed', 'cancelled'],
       'confirmed': ['preparing', 'cancelled'],
@@ -381,7 +411,6 @@ app.patch('/orders/:id/status', [
       });
     }
 
-    // If cancelling, restore product stock
     if (status === 'cancelled' && order.status !== 'cancelled') {
       const orderItems = await OrderItem.findAll({
         where: { order_id: order.id }
@@ -392,14 +421,11 @@ app.patch('/orders/:id/status', [
           await updateProductStock(item.productId, item.quantity, 'increment');
         } catch (error) {
           console.error(`Failed to restore stock for product ${item.productId}:`, error);
-          // Continue with other items even if one fails
         }
       }
     }
 
     await order.update({ status });
-
-    // Update metrics
     orderCounter.labels(status).inc();
 
     res.json({
@@ -412,7 +438,6 @@ app.patch('/orders/:id/status', [
   }
 });
 
-// Cancel order
 app.delete('/orders/:id', async (req, res) => {
   try {
     const userId = getUserId(req);
@@ -428,7 +453,6 @@ app.delete('/orders/:id', async (req, res) => {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    // Can only cancel if order is pending or confirmed
     if (!['pending', 'confirmed'].includes(order.status)) {
       return res.status(400).json({ 
         error: 'Cannot cancel order in current status',
@@ -437,7 +461,6 @@ app.delete('/orders/:id', async (req, res) => {
       });
     }
 
-    // Restore product stock
     const orderItems = await OrderItem.findAll({
       where: { order_id: order.id }
     });
@@ -447,12 +470,10 @@ app.delete('/orders/:id', async (req, res) => {
         await updateProductStock(item.productId, item.quantity, 'increment');
       } catch (error) {
         console.error(`Failed to restore stock for product ${item.productId}:`, error);
-        // Continue with other items
       }
     }
 
     await order.update({ status: 'cancelled' });
-
     orderCounter.labels('cancelled').inc();
 
     res.json({ 
@@ -462,48 +483,6 @@ app.delete('/orders/:id', async (req, res) => {
   } catch (error) {
     console.error('Cancel order error:', error);
     res.status(500).json({ error: 'Failed to cancel order' });
-  }
-});
-
-// ===== HEALTH CHECK =====
-app.get('/health', async (req, res) => {
-  try {
-    await sequelize.authenticate();
-    
-    // Check product service connectivity
-    let productServiceStatus = 'connected';
-    try {
-      await axios.get(`${PRODUCT_SERVICE_URL}/health`, { timeout: 3000 });
-    } catch (error) {
-      productServiceStatus = 'unreachable';
-    }
-
-    const status = productServiceStatus === 'connected' ? 'ok' : 'degraded';
-
-    res.status(status === 'ok' ? 200 : 503).json({
-      status,
-      service: 'order-service',
-      database: 'connected',
-      productService: productServiceStatus,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      status: 'error',
-      service: 'order-service',
-      database: 'disconnected',
-      error: error.message
-    });
-  }
-});
-
-// ===== METRICS ENDPOINT =====
-app.get('/metrics', async (req, res) => {
-  try {
-    res.set('Content-Type', client.register.contentType);
-    res.end(await client.register.metrics());
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to collect metrics' });
   }
 });
 

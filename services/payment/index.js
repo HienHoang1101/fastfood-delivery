@@ -1,6 +1,7 @@
 const express = require('express');
 const axios = require('axios');
 const { body, validationResult } = require('express-validator');
+const { Op } = require('sequelize');
 const Payment = require('./models/Payment');
 const sequelize = require('./db');
 const client = require('prom-client');
@@ -40,7 +41,6 @@ const paymentProcessingDuration = new client.Histogram({
   buckets: [0.1, 0.5, 1, 2, 5]
 });
 
-// Middleware đo metrics
 app.use((req, res, next) => {
   const end = () => {
     requestCounter.labels(req.method, req.route?.path || req.path, res.statusCode).inc();
@@ -104,21 +104,16 @@ const updateOrderPaymentStatus = async (orderId, paymentId, userId) => {
     );
   } catch (error) {
     console.error('Failed to update order status:', error.message);
-    // Don't throw - payment is already processed
   }
 };
 
-// Simulate payment processing
 const processPayment = async (paymentMethod, amount, cardDetails = null) => {
-  // Simulate payment gateway delay
   await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000));
 
-  // Simulate payment failures (10% failure rate)
   if (Math.random() < 0.1) {
     throw new Error('Payment declined by payment gateway');
   }
 
-  // Generate transaction ID
   const transactionId = `TXN-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
 
   return {
@@ -128,9 +123,50 @@ const processPayment = async (paymentMethod, amount, cardDetails = null) => {
   };
 };
 
-// ===== PAYMENT ROUTES =====
+// ===== HEALTH CHECK =====
+app.get('/health', async (req, res) => {
+  try {
+    await sequelize.authenticate();
 
-// Create payment
+    try {
+      await axios.get(`${ORDER_SERVICE_URL}/health`, { timeout: 3000 });
+    } catch (error) {
+      return res.status(503).json({
+        status: 'degraded',
+        service: 'payment-service',
+        database: 'connected',
+        orderService: 'unreachable'
+      });
+    }
+
+    res.json({ 
+      status: 'ok',
+      service: 'payment-service',
+      database: 'connected',
+      orderService: 'connected',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      status: 'error',
+      service: 'payment-service',
+      database: 'disconnected',
+      error: error.message
+    });
+  }
+});
+
+// ===== METRICS ENDPOINT =====
+app.get('/metrics', async (req, res) => {
+  try {
+    res.set('Content-Type', client.register.contentType);
+    res.end(await client.register.metrics());
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to collect metrics' });
+  }
+});
+
+// ===== PAYMENT ROUTES =====
 app.post('/payments', validatePayment, handleValidationErrors, async (req, res) => {
   const endTimer = paymentProcessingDuration.startTimer();
   const transaction = await sequelize.transaction();
@@ -143,7 +179,6 @@ app.post('/payments', validatePayment, handleValidationErrors, async (req, res) 
 
     const { orderId, amount, paymentMethod, cardDetails } = req.body;
 
-    // Verify order exists and belongs to user
     const order = await verifyOrder(orderId, userId);
 
     if (order.status !== 'pending') {
@@ -153,7 +188,6 @@ app.post('/payments', validatePayment, handleValidationErrors, async (req, res) 
       });
     }
 
-    // Verify amount matches order total
     if (parseFloat(amount).toFixed(2) !== parseFloat(order.total_price).toFixed(2)) {
       return res.status(400).json({ 
         error: 'Payment amount does not match order total',
@@ -162,11 +196,10 @@ app.post('/payments', validatePayment, handleValidationErrors, async (req, res) 
       });
     }
 
-    // Check for existing payment
     const existingPayment = await Payment.findOne({
       where: { 
         order_id: orderId,
-        status: { [require('sequelize').Op.in]: ['completed', 'pending'] }
+        status: { [Op.in]: ['completed', 'pending'] }
       }
     });
 
@@ -177,7 +210,6 @@ app.post('/payments', validatePayment, handleValidationErrors, async (req, res) 
       });
     }
 
-    // Create payment record
     const payment = await Payment.create({
       order_id: orderId,
       user_id: userId,
@@ -186,12 +218,10 @@ app.post('/payments', validatePayment, handleValidationErrors, async (req, res) 
       status: 'pending'
     }, { transaction });
 
-    // Process payment with payment gateway
     let paymentResult;
     try {
       paymentResult = await processPayment(paymentMethod, amount, cardDetails);
     } catch (error) {
-      // Update payment as failed
       await payment.update({ 
         status: 'failed',
         transaction_id: null,
@@ -210,7 +240,6 @@ app.post('/payments', validatePayment, handleValidationErrors, async (req, res) 
       });
     }
 
-    // Update payment as completed
     await payment.update({
       status: 'completed',
       transaction_id: paymentResult.transactionId,
@@ -219,12 +248,10 @@ app.post('/payments', validatePayment, handleValidationErrors, async (req, res) 
 
     await transaction.commit();
 
-    // Update order status to confirmed (don't wait for this)
     updateOrderPaymentStatus(orderId, payment.id, userId).catch(err => {
       console.error('Failed to update order:', err);
     });
 
-    // Update metrics
     paymentCounter.labels('completed', paymentMethod).inc();
     paymentAmountHistogram.observe(parseFloat(amount));
     endTimer({ status: 'success' });
@@ -255,7 +282,6 @@ app.post('/payments', validatePayment, handleValidationErrors, async (req, res) 
   }
 });
 
-// Get payment by ID
 app.get('/payments/:id', async (req, res) => {
   try {
     const userId = getUserId(req);
@@ -281,7 +307,6 @@ app.get('/payments/:id', async (req, res) => {
   }
 });
 
-// Get payments for a specific order
 app.get('/orders/:orderId/payments', async (req, res) => {
   try {
     const userId = getUserId(req);
@@ -304,7 +329,6 @@ app.get('/orders/:orderId/payments', async (req, res) => {
   }
 });
 
-// Get all payments for user
 app.get('/payments', async (req, res) => {
   try {
     const userId = getUserId(req);
@@ -342,7 +366,6 @@ app.get('/payments', async (req, res) => {
   }
 });
 
-// Refund payment (admin only)
 app.post('/payments/:id/refund', async (req, res) => {
   const transaction = await sequelize.transaction();
 
@@ -365,7 +388,6 @@ app.post('/payments/:id/refund', async (req, res) => {
       });
     }
 
-    // Simulate refund processing
     await new Promise(resolve => setTimeout(resolve, 1000));
 
     await payment.update({
@@ -388,7 +410,6 @@ app.post('/payments/:id/refund', async (req, res) => {
   }
 });
 
-// Get payment statistics (admin only)
 app.get('/statistics/payments', async (req, res) => {
   try {
     const userRole = req.headers['x-user-role'];
@@ -401,7 +422,7 @@ app.get('/statistics/payments', async (req, res) => {
     const where = {};
     if (startDate && endDate) {
       where.createdAt = {
-        [require('sequelize').Op.between]: [new Date(startDate), new Date(endDate)]
+        [Op.between]: [new Date(startDate), new Date(endDate)]
       };
     }
 
@@ -432,47 +453,6 @@ app.get('/statistics/payments', async (req, res) => {
   } catch (error) {
     console.error('Get statistics error:', error);
     res.status(500).json({ error: 'Failed to fetch statistics' });
-  }
-});
-
-// ===== HEALTH CHECK =====
-app.get('/health', async (req, res) => {
-  try {
-    await sequelize.authenticate();
-
-    // Check order service connectivity
-    try {
-      await axios.get(`${ORDER_SERVICE_URL}/health`, { timeout: 3000 });
-    } catch (error) {
-      return res.status(503).json({
-        status: 'degraded',
-        database: 'connected',
-        orderService: 'unreachable'
-      });
-    }
-
-    res.json({ 
-      status: 'ok',
-      database: 'connected',
-      orderService: 'connected',
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      status: 'error',
-      database: 'disconnected',
-      error: error.message
-    });
-  }
-});
-
-// ===== METRICS ENDPOINT =====
-app.get('/metrics', async (req, res) => {
-  try {
-    res.set('Content-Type', client.register.contentType);
-    res.end(await client.register.metrics());
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to collect metrics' });
   }
 });
 

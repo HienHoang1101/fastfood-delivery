@@ -32,7 +32,6 @@ const productStockGauge = new client.Gauge({
   labelNames: ['product_id', 'product_name']
 });
 
-// Middleware đo metrics
 app.use((req, res, next) => {
   const end = () => {
     requestCounter.labels(req.method, req.route?.path || req.path, res.statusCode).inc();
@@ -75,9 +74,39 @@ const updateStockMetrics = async () => {
   }
 };
 
-// ===== PRODUCT ROUTES =====
+// ===== HEALTH CHECK =====
+app.get('/health', async (req, res) => {
+  try {
+    await sequelize.authenticate();
+    res.json({ 
+      status: 'ok',
+      service: 'product-service',
+      database: 'connected',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      status: 'error',
+      service: 'product-service',
+      database: 'disconnected',
+      error: error.message
+    });
+  }
+});
 
-// Get all products with filtering, search, and pagination
+// ===== METRICS ENDPOINT =====
+app.get('/metrics', async (req, res) => {
+  try {
+    await updateStockMetrics();
+    
+    res.set('Content-Type', client.register.contentType);
+    res.end(await client.register.metrics());
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to collect metrics' });
+  }
+});
+
+// ===== PRODUCT ROUTES =====
 app.get('/products', [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 }),
@@ -102,7 +131,6 @@ app.get('/products', [
 
     const offset = (page - 1) * limit;
 
-    // Build where clause
     const where = {};
 
     if (category) {
@@ -126,7 +154,6 @@ app.get('/products', [
       where.stock = { [Op.gt]: 0 };
     }
 
-    // Execute query
     const { count, rows } = await Product.findAndCountAll({
       where,
       limit: parseInt(limit),
@@ -149,7 +176,6 @@ app.get('/products', [
   }
 });
 
-// Get product by ID
 app.get('/products/:id', async (req, res) => {
   try {
     const product = await Product.findByPk(req.params.id);
@@ -158,7 +184,6 @@ app.get('/products/:id', async (req, res) => {
       return res.status(404).json({ error: 'Product not found' });
     }
 
-    // Track view
     productViewCounter.labels(product.id.toString()).inc();
 
     res.json(product);
@@ -168,7 +193,6 @@ app.get('/products/:id', async (req, res) => {
   }
 });
 
-// Get products by IDs (bulk endpoint for order service)
 app.post('/products/bulk', [
   body('ids').isArray().withMessage('IDs must be an array'),
   body('ids.*').isInt().withMessage('Each ID must be an integer')
@@ -189,7 +213,6 @@ app.post('/products/bulk', [
   }
 });
 
-// Get product categories
 app.get('/categories', async (req, res) => {
   try {
     const categories = await Product.findAll({
@@ -206,7 +229,6 @@ app.get('/categories', async (req, res) => {
   }
 });
 
-// Create new product (admin only)
 app.post('/products', validateProduct, handleValidationErrors, async (req, res) => {
   try {
     if (!isAdmin(req)) {
@@ -224,7 +246,6 @@ app.post('/products', validateProduct, handleValidationErrors, async (req, res) 
       image_url
     });
 
-    // Update metrics
     productStockGauge.labels(product.id.toString(), product.name).set(product.stock);
 
     res.status(201).json({
@@ -237,7 +258,6 @@ app.post('/products', validateProduct, handleValidationErrors, async (req, res) 
   }
 });
 
-// Update product (admin only)
 app.put('/products/:id', validateProduct, handleValidationErrors, async (req, res) => {
   try {
     if (!isAdmin(req)) {
@@ -260,7 +280,6 @@ app.put('/products/:id', validateProduct, handleValidationErrors, async (req, re
       image_url
     });
 
-    // Update metrics
     productStockGauge.labels(product.id.toString(), product.name).set(product.stock);
 
     res.json({
@@ -273,7 +292,6 @@ app.put('/products/:id', validateProduct, handleValidationErrors, async (req, re
   }
 });
 
-// Update stock (internal use by order service)
 app.patch('/products/:id/stock', [
   body('quantity').isInt().withMessage('Quantity must be an integer'),
   body('operation').isIn(['increment', 'decrement']).withMessage('Operation must be increment or decrement')
@@ -298,7 +316,6 @@ app.patch('/products/:id/stock', [
 
     await product.update({ stock: newStock });
 
-    // Update metrics
     productStockGauge.labels(product.id.toString(), product.name).set(newStock);
 
     res.json({
@@ -311,7 +328,6 @@ app.patch('/products/:id/stock', [
   }
 });
 
-// Delete product (admin only)
 app.delete('/products/:id', async (req, res) => {
   try {
     if (!isAdmin(req)) {
@@ -332,37 +348,6 @@ app.delete('/products/:id', async (req, res) => {
   }
 });
 
-// ===== HEALTH CHECK =====
-app.get('/health', async (req, res) => {
-  try {
-    await sequelize.authenticate();
-    res.json({ 
-      status: 'ok',
-      database: 'connected',
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      status: 'error',
-      database: 'disconnected',
-      error: error.message
-    });
-  }
-});
-
-// ===== METRICS ENDPOINT =====
-app.get('/metrics', async (req, res) => {
-  try {
-    // Update stock metrics before serving
-    await updateStockMetrics();
-    
-    res.set('Content-Type', client.register.contentType);
-    res.end(await client.register.metrics());
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to collect metrics' });
-  }
-});
-
 // ===== START SERVER =====
 (async () => {
   try {
@@ -372,7 +357,6 @@ app.get('/metrics', async (req, res) => {
     await sequelize.sync({ alter: true });
     console.log('✅ Database synced');
 
-    // Initialize stock metrics
     await updateStockMetrics();
 
     app.listen(PORT, () => {
