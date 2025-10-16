@@ -7,17 +7,8 @@ export const CartProvider = ({ children }) => {
   const [cartItems, setCartItems] = useState([]);
   const [cartTotal, setCartTotal] = useState(0);
 
-  // Load cart from localStorage on mount
-  useEffect(() => {
-    const savedCart = localStorage.getItem('cart');
-    if (savedCart) {
-      try {
-        setCartItems(JSON.parse(savedCart));
-      } catch (error) {
-        console.error('Error loading cart:', error);
-      }
-    }
-  }, []);
+  // ✅ REMOVED localStorage - Store in memory only
+  // NO localStorage.getItem or localStorage.setItem
 
   // Calculate total - use useCallback to memoize
   const calculateTotal = useCallback(() => {
@@ -28,9 +19,8 @@ export const CartProvider = ({ children }) => {
     setCartTotal(total);
   }, [cartItems]);
 
-  // Save to localStorage and recalculate whenever cart changes
+  // Recalculate whenever cart changes
   useEffect(() => {
-    localStorage.setItem('cart', JSON.stringify(cartItems));
     calculateTotal();
   }, [cartItems, calculateTotal]);
 
@@ -89,7 +79,13 @@ export const CartProvider = ({ children }) => {
     const item = cartItems.find((item) => item.id === productId);
     return item ? item.quantity : 0;
   };
-
+// ✅ NEW: Format items for order creation
+const getOrderItems = () => {
+  return cartItems.map(item => ({
+    productId: item.id,  // ✅ camelCase
+    quantity: item.quantity
+  }));
+};
   const value = {
     cartItems,
     cartTotal,

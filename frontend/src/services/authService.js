@@ -34,9 +34,9 @@ const authService = {
   isAuthenticated: () => !!localStorage.getItem('token'),
 
   getProfile: async () => {
-    const response = await api.get('/users/profile');
-    return response.data;
-  },
+  const response = await api.get('/users/profile'); // ✅ Correct endpoint
+  return response.data;
+},
 
   updateProfile: async (userData) => {
     const response = await api.put('/users/profile', userData);

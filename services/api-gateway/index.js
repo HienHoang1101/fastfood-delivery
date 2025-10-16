@@ -5,55 +5,139 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const morgan = require('morgan');
 const jwt = require('jsonwebtoken');
+const winston = require('winston');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 8080;
+
+// ===== LOGGING SETUP =====
+const logger = winston.createLogger({
+  level: process.env.LOG_LEVEL || 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.errors({ stack: true }),
+    winston.format.json()
+  ),
+  transports: [
+    new winston.transports.File({ filename: 'error.log', level: 'error' }),
+    new winston.transports.File({ filename: 'combined.log' }),
+  ],
+});
+
+if (process.env.NODE_ENV !== 'production') {
+  logger.add(new winston.transports.Console({
+    format: winston.format.combine(
+      winston.format.colorize(),
+      winston.format.simple()
+    )
+  }));
+}
 
 // ===== ENVIRONMENT VALIDATION =====
 const requiredEnvVars = ['JWT_SECRET'];
 const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
 
 if (missingEnvVars.length > 0) {
-  console.error('❌ Missing required environment variables:', missingEnvVars);
+  logger.error('Missing required environment variables', { missing: missingEnvVars });
   process.exit(1);
 }
 
 if (process.env.NODE_ENV === 'production' && 
     process.env.JWT_SECRET === 'your-secret-key-change-in-production') {
-  console.error('❌ SECURITY: Change JWT_SECRET in production!');
+  logger.error('SECURITY: Change JWT_SECRET in production!');
+  process.exit(1);
+}
+
+if (process.env.JWT_SECRET.length < 32) {
+  logger.error('JWT_SECRET must be at least 32 characters long');
   process.exit(1);
 }
 
 // ===== MIDDLEWARE =====
 
 // Security headers
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: process.env.NODE_ENV === 'production' ? undefined : false
+}));
 
-// CORS configuration
+// ✅ FIXED CORS configuration
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000'],
-  credentials: true
+  origin: function (origin, callback) {
+    const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
+      'http://localhost:3000',
+      'http://localhost:3005'
+    ];
+    
+    // Allow requests with no origin (mobile apps, curl, Postman)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      logger.warn('CORS blocked', { origin, allowedOrigins });
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-User-Id', 'X-User-Role', 'X-User-Email'],
+  exposedHeaders: ['X-Request-Id'],
+  maxAge: 86400 // 24 hours
 }));
 
 // Body parsing
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Logging
-app.use(morgan('combined'));
+// Request ID for tracking
+app.use((req, res, next) => {
+  req.id = require('crypto').randomBytes(16).toString('hex');
+  res.setHeader('X-Request-Id', req.id);
+  next();
+});
 
-// Rate limiting
-const limiter = rateLimit({
+// Logging with request ID
+app.use(morgan('combined', {
+  stream: {
+    write: (message) => logger.info(message.trim())
+  }
+}));
+
+// ✅ ENHANCED Rate limiting
+const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100,
-  message: 'Too many requests from this IP, please try again later.'
+  message: { error: 'Too many requests from this IP, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    logger.warn('Rate limit exceeded', { 
+      ip: req.ip, 
+      path: req.path,
+      requestId: req.id 
+    });
+    res.status(429).json({ 
+      error: 'Too many requests from this IP, please try again later.' 
+    });
+  }
 });
-app.use(limiter);
 
-// ===== JWT AUTHENTICATION MIDDLEWARE (FIXED) =====
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: { error: 'Too many authentication attempts, please try again later.' },
+  skipSuccessfulRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
-// ✅ Define public routes with specific HTTP methods
+app.use(generalLimiter);
+app.use('/api/users/login', authLimiter);
+app.use('/api/users/register', authLimiter);
+
+// ===== JWT AUTHENTICATION MIDDLEWARE =====
+
 const PUBLIC_ROUTES = [
   { path: '/api/users/login', methods: ['POST'] },
   { path: '/api/users/register', methods: ['POST'] },
@@ -70,34 +154,46 @@ const isPublicRoute = (path, method) => {
 };
 
 const authenticateToken = (req, res, next) => {
-  // Check if route is public
   if (isPublicRoute(req.path, req.method)) {
     return next();
   }
 
-  // Require authentication for all other routes
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
+    logger.warn('Missing token', { 
+      path: req.path, 
+      ip: req.ip,
+      requestId: req.id 
+    });
     return res.status(401).json({ error: 'Access token required' });
   }
 
   jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
     if (err) {
+      logger.warn('Invalid token', { 
+        error: err.message, 
+        path: req.path,
+        requestId: req.id 
+      });
       return res.status(403).json({ error: 'Invalid or expired token' });
     }
     req.user = user;
+    logger.info('User authenticated', { 
+      userId: user.id, 
+      path: req.path,
+      requestId: req.id 
+    });
     next();
   });
 };
 
-// ✅ Apply authentication globally
 app.use(authenticateToken);
 
 // ===== PROXY CONFIGURATION =====
 
-const proxyOptions = (target) => ({
+const proxyOptions = (target, serviceName) => ({
   target,
   changeOrigin: true,
   pathRewrite: (path, req) => {
@@ -109,36 +205,56 @@ const proxyOptions = (target) => ({
       proxyReq.setHeader('X-User-Email', req.user.email);
       proxyReq.setHeader('X-User-Role', req.user.role || 'customer');
     }
+    proxyReq.setHeader('X-Request-Id', req.id);
+    proxyReq.setHeader('X-Forwarded-For', req.ip);
+    
+    logger.info('Proxying request', {
+      service: serviceName,
+      path: req.path,
+      method: req.method,
+      requestId: req.id
+    });
+  },
+  onProxyRes: (proxyRes, req, res) => {
+    logger.info('Proxy response', {
+      service: serviceName,
+      statusCode: proxyRes.statusCode,
+      requestId: req.id
+    });
   },
   onError: (err, req, res) => {
-    console.error('Proxy Error:', err.message);
+    logger.error('Proxy error', {
+      service: serviceName,
+      error: err.message,
+      path: req.path,
+      requestId: req.id
+    });
     res.status(503).json({ 
       error: 'Service temporarily unavailable',
-      message: err.message 
+      message: err.message,
+      requestId: req.id
     });
-  }
+  },
+  timeout: 30000, // 30 seconds
+  proxyTimeout: 30000
 });
 
 // ===== ROUTE PROXIES =====
 
-// User Service
 app.use('/api/users', createProxyMiddleware(
-  proxyOptions(process.env.USER_SERVICE_URL || 'http://user:3000')
+  proxyOptions(process.env.USER_SERVICE_URL || 'http://user:3000', 'user-service')
 ));
 
-// Product Service
 app.use('/api/products', createProxyMiddleware(
-  proxyOptions(process.env.PRODUCT_SERVICE_URL || 'http://product:3000')
+  proxyOptions(process.env.PRODUCT_SERVICE_URL || 'http://product:3000', 'product-service')
 ));
 
-// Order Service
 app.use('/api/orders', createProxyMiddleware(
-  proxyOptions(process.env.ORDER_SERVICE_URL || 'http://order:3000')
+  proxyOptions(process.env.ORDER_SERVICE_URL || 'http://order:3000', 'order-service')
 ));
 
-// Payment Service
 app.use('/api/payments', createProxyMiddleware(
-  proxyOptions(process.env.PAYMENT_SERVICE_URL || 'http://payment:3000')
+  proxyOptions(process.env.PAYMENT_SERVICE_URL || 'http://payment:3000', 'payment-service')
 ));
 
 // ===== HEALTH CHECK =====
@@ -147,29 +263,74 @@ app.get('/health', (req, res) => {
     status: 'ok',
     service: 'api-gateway',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
 // ===== ERROR HANDLING =====
 app.use((err, req, res, next) => {
-  console.error('Error:', err);
+  logger.error('Unhandled error', { 
+    error: err.message, 
+    stack: err.stack,
+    path: req.path,
+    requestId: req.id
+  });
+  
   res.status(err.status || 500).json({
     error: err.message || 'Internal Server Error',
+    requestId: req.id,
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });
 });
 
 // 404 handler
 app.use('*', (req, res) => {
-  res.status(404).json({ error: 'Route not found' });
+  logger.warn('Route not found', { 
+    path: req.originalUrl,
+    method: req.method,
+    requestId: req.id
+  });
+  res.status(404).json({ 
+    error: 'Route not found',
+    requestId: req.id
+  });
 });
 
-// ===== START SERVER =====
-app.listen(PORT, () => {
-  console.log(`🚀 API Gateway running on port ${PORT}`);
-  console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`✅ JWT Authentication enabled`);
+// ===== GRACEFUL SHUTDOWN =====
+const server = app.listen(PORT, () => {
+  logger.info('API Gateway started', {
+    port: PORT,
+    environment: process.env.NODE_ENV || 'development',
+    nodeVersion: process.version
+  });
+});
+
+const gracefulShutdown = (signal) => {
+  logger.info(`${signal} received. Starting graceful shutdown...`);
+  
+  server.close(() => {
+    logger.info('HTTP server closed');
+    process.exit(0);
+  });
+  
+  setTimeout(() => {
+    logger.error('Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught Exception', { error: error.message, stack: error.stack });
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled Rejection', { reason, promise });
+  process.exit(1);
 });
 
 module.exports = app;

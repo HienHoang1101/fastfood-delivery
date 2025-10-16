@@ -61,13 +61,19 @@ const Checkout = () => {
     try {
       // Step 1: Create order
       const orderData = {
-        items: cartItems.map((item) => ({
-          productId: item.id,
-          quantity: item.quantity,
-        })),
-        deliveryAddress: formData.deliveryAddress,
-        notes: formData.notes,
-      };
+  items: getOrderItems(), // ✅ Use helper method
+  deliveryAddress: formData.deliveryAddress,
+  notes: formData.notes,
+};
+
+// ✅ Better error handling
+let errorMessage = 'Failed to place order';
+
+if (error.response?.data?.error) {
+  errorMessage = error.response.data.error;
+} else if (error.response?.data?.errors) {
+  errorMessage = error.response.data.errors.map(e => e.msg).join(', ');
+};
 
       const orderResponse = await orderService.createOrder(orderData);
       const orderId = orderResponse.order.id;
